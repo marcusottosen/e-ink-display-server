@@ -7,7 +7,14 @@ dependencies = [
     "httpx>=0.27,<1",
     "inky-contract",
     "pillow>=10.4,<12",
+    "pydantic-settings>=2.7,<3",
 ]
+
+[project.optional-dependencies]
+hardware = ["inky>=2.4,<3"]
+
+[project.scripts]
+inky-pi-agent = "inky_pi_agent.main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/inky_pi_agent"]

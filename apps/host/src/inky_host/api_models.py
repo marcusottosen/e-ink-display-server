@@ -23,7 +23,6 @@ class AssetResponse(BaseModel):
     created_at: datetime
     deleted_at: datetime | None
     preview_url: str | None = None
-    deletion_blockers: list[str] = []
 
 
 class JobResponse(BaseModel):
@@ -179,7 +178,6 @@ class BulkDeleteRequest(BaseModel):
 
 class DeleteResult(BaseModel):
     deleted_ids: list[str]
-    blocked: dict[str, list[str]]
 
 
 class ActivityResponse(BaseModel):

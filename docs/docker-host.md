@@ -49,8 +49,8 @@ The first frontend should be a focused control panel for one display, while keep
 the information model ready for multiple displays. The server owns a fixed display
 profile for each configured agent; the Pi does not need to identify or report its
 display model. The frontend must use the same renderer and display profile as
-artifact delivery: a preview is a faithful representation of what will be sent to
-the panel, not a browser-only approximation.
+artifact delivery: a preview is the exact resized RGB artifact sent to the Pi, not
+a browser-only approximation.
 
 ### Dashboard: upload and show
 
@@ -64,7 +64,7 @@ the panel, not a browser-only approximation.
   immediate screen change.
 - Keep the uploaded original and rendered artifact in the gallery. Do not make a
   one-off display action an ephemeral upload.
-- Allow the user to review the faithful preview and adjust display settings before
+- Allow the user to review the final-resolution preview and adjust display settings before
   sending it; `Upload and display` may use the current defaults when no adjustment
   is needed.
 
@@ -79,20 +79,21 @@ the panel, not a browser-only approximation.
 - Expose per-render framing controls: crop, fit, padding, focal point, rotation,
   and optional flip. Clearly distinguish these content settings from the physical
   display orientation.
-- Preview the final 800 × 480 display raster at the configured orientation, with
-  a visible indication of any crop or padding. Support both landscape and portrait
-  installations.
+- Preview the final 800 × 480 RGB raster at the configured orientation, with a
+  visible indication of any crop or padding. Support both landscape and portrait
+  installations. The host preserves source colours and does not perform palette
+  conversion, dithering, or creative filters.
 
 ### Gallery
 
 - List all stored original images with thumbnail, filename, upload date, source
   dimensions, and the most recent rendered/displayed state.
-- Allow opening an image to inspect its full seven-colour, display-resolution
-  preview and to display it immediately using the current display settings.
+- Allow opening an image to inspect its full-colour, display-resolution preview and
+  to display it immediately using the current display settings.
 - Support multi-select and bulk deletion as well as single-image deletion.
-- Require confirmation for deletion and state whether an image is currently used
-  by a running album or is the current display artifact. Preserve audit history and
-  either prevent unsafe deletion or require an explicit replacement choice.
+- Require confirmation for deletion, but never block it because an image is in use.
+  Preserve audit history and leave existing displayed artifacts intact until normal
+  replacement; running albums simply skip trashed images.
 - Prefer a recoverable soft-delete/undo period before permanent storage cleanup.
 
 ### Albums
@@ -109,14 +110,12 @@ the panel, not a browser-only approximation.
   artifact. Per-image overrides should be possible later; album defaults are
   sufficient for the first album release.
 
-### Future creative rendering
+### Colour preservation
 
-- Add a later, optional creative filter collection designed for the panel's
-  seven-colour palette. These presets may deliberately stylize an image beyond
-  accurate palette conversion.
-- A filter selection must create a separately versioned render setting, show a
-  faithful final-resolution preview before display, and never overwrite the
-  original upload.
+- The host preserves the original image's RGB colours. It only applies configured
+  orientation, crop/fit/padding, resize, and flip operations.
+- Do not add palette conversion, dithering, colour optimisation, or creative
+  filters unless this requirement is explicitly changed.
 
 ### Fitting supporting features
 
@@ -184,16 +183,15 @@ For each requested display image:
 2. Normalize EXIF orientation and colour profile.
 3. Apply the configured crop, fit, stretch, or padding mode.
 4. Resize to 800 x 480.
-5. Convert to the E673 seven-colour palette, including white.
-6. Apply the selected dithering strategy.
-7. Apply rotation or flip settings if configured.
-8. Produce a browser preview.
-9. Produce the immutable device artifact.
-10. Record renderer version, settings, dimensions, palette, and checksum.
+5. Apply rotation or flip settings if configured.
+6. Produce a browser preview from the same RGB raster.
+7. Produce the immutable RGB PNG device artifact.
+8. Record renderer version, settings, dimensions, target display profile, and checksum.
 
 The renderer should be deterministic. The artifact cache key should include the source image hash, display profile, render settings, and renderer version.
 
-The first artifact format should be an 800 x 480 paletted PNG. A later optimized format may contain packed native pixel values for lower Pi CPU usage and predictable transfer size.
+The first artifact format is an 800 x 480 RGB PNG. The Pi hardware driver performs
+the unavoidable physical-panel colour mapping only when it refreshes the display.
 
 ## Suggested data model
 
@@ -314,10 +312,10 @@ Artifact downloads must be binary responses, not base64 embedded in JSON.
 ## Gallery and album behaviour
 
 Gallery deletion is a soft delete: original bytes and audit history remain available
-for a later restore. The host rejects a single-image deletion when the asset is the
-current or desired display content, is in a running album, or belongs to a queued,
-rendering, ready, or active display job. A bulk-delete response reports protected
-items while moving all safe selections to Trash.
+for a later restore. The host always permits both single and bulk deletion, even if
+the image is current, desired, queued, or belongs to a running album. Existing
+artifacts remain available for already-issued display work; albums skip trashed
+items and stop only if none remain available.
 
 An album has ordered gallery items, a display target, default render settings,
 sequential or shuffle selection, a minimum 60-second interval, enabled state, time
@@ -363,7 +361,7 @@ A static IP or DHCP reservation for the Docker host is recommended. The Pi shoul
 
 ## Testing requirements
 
-- Unit tests for image sizing, palette conversion, dithering, and cache keys
+- Unit tests for image sizing, RGB colour preservation, checksums, and cache keys
 - API contract tests shared with the Pi agent
 - Worker retry and lease-expiry tests
 - Artifact checksum and corruption tests

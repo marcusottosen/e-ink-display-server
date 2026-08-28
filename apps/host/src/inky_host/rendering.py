@@ -10,20 +10,9 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from inky_contract import DisplayProfile, DitherMode, RenderSettings
+from inky_contract import DisplayProfile, RenderSettings
 
-RENDERER_VERSION = "1.0.0"
-
-# The order is stable and matches the v1 shared palette contract.
-PALETTE_RGB = (
-    (0, 0, 0),
-    (255, 255, 255),
-    (220, 30, 40),
-    (245, 220, 30),
-    (30, 75, 180),
-    (25, 130, 70),
-    (240, 120, 30),
-)
+RENDERER_VERSION = "1.1.0"
 
 
 @dataclass(frozen=True)
@@ -50,7 +39,11 @@ def artifact_cache_key(source_sha256: str, profile: DisplayProfile, settings: Re
 def render_image(
     source_path: Path, source_sha256: str, profile: DisplayProfile, settings: RenderSettings
 ) -> RenderedArtifact:
-    """Render an original image into a deterministic paletted PNG artifact."""
+    """Resize and orient an original image into a deterministic RGB PNG artifact.
+
+    The host preserves source colours. The physical E-Ink driver's unavoidable
+    palette mapping happens only when the Pi performs the hardware refresh.
+    """
 
     with Image.open(source_path) as original:
         image = ImageOps.exif_transpose(original).convert("RGB")
@@ -60,7 +53,6 @@ def render_image(
             image = ImageOps.mirror(image)
         if settings.flip_vertical:
             image = ImageOps.flip(image)
-        image = _quantize(image, settings.dither_mode)
         preview_content = _encode_png(image)
         image = _rotate_to_hardware(image, int(profile.rotation))
 
@@ -123,7 +115,7 @@ def _frame_image(image: Image.Image, target: tuple[int, int], settings: RenderSe
     if settings.fit_mode.value == "contain":
         scale = min(target_width / source_width, target_height / source_height)
         resized = image.resize((round(source_width * scale), round(source_height * scale)), Image.Resampling.LANCZOS)
-        framed = Image.new("RGB", target, PALETTE_RGB[1])
+        framed = Image.new("RGB", target, "white")
         framed.paste(resized, ((target_width - resized.width) // 2, (target_height - resized.height) // 2))
         return framed
 
@@ -134,11 +126,3 @@ def _frame_image(image: Image.Image, target: tuple[int, int], settings: RenderSe
     left = min(max(left, 0), resized.width - target_width)
     top = min(max(top, 0), resized.height - target_height)
     return resized.crop((left, top, left + target_width, top + target_height))
-
-
-def _quantize(image: Image.Image, dither_mode: DitherMode) -> Image.Image:
-    palette_image = Image.new("P", (1, 1))
-    palette = [channel for color in PALETTE_RGB for channel in color]
-    palette_image.putpalette(palette + [0] * (768 - len(palette)))
-    dither = Image.Dither.FLOYDSTEINBERG if dither_mode is DitherMode.FLOYD_STEINBERG else Image.Dither.NONE
-    return image.quantize(palette=palette_image, dither=dither)

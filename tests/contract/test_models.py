@@ -50,7 +50,7 @@ def test_desired_state_requires_a_sha256_bound_artifact_url() -> None:
     artifact = ArtifactDescriptor(
         sha256=SHA256,
         url=f"/api/v1/artifacts/{SHA256}",
-        format=ArtifactFormat.PALETTED_PNG,
+        format=ArtifactFormat.RGB_PNG,
         width=800,
         height=480,
         palette=PALETTE,

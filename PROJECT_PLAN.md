@@ -18,7 +18,10 @@ Important decisions to preserve during implementation:
 - Use atomic writes on both server and Pi storage.
 - Verify the E673 GPIO mapping and refresh timing on real hardware before calling the integration complete.
 
-Open implementation risks are hardware/library compatibility on the Pi Zero W, the exact seven-colour Inky palette and dithering behaviour, refresh duration, and recovery semantics after power loss during `show()`. The initial trusted-LAN installation intentionally uses simple Pi-pull HTTP; security hardening is deferred.
+Open implementation risks are hardware/library compatibility on the Pi Zero W,
+E673 refresh duration, and recovery semantics after power loss during `show()`.
+The initial trusted-LAN installation intentionally uses simple Pi-pull HTTP;
+security hardening is deferred. Host rendering preserves RGB source colours.
 
 ## Target folder structure
 
@@ -62,12 +65,14 @@ Open implementation risks are hardware/library compatibility on the Pi Zero W, t
 - [x] Scaffold the FastAPI host and health endpoint.
 - [x] Implement configuration and structured logging with correlation IDs.
 - [x] Implement asset upload validation, SHA-256 hashing, and persistent original storage.
-- [x] Implement deterministic Pillow rendering: EXIF orientation, crop/fit/padding, 800×480 resize, palette conversion, dithering, rotation/flip, preview, and paletted PNG artifact.
+- [x] Implement deterministic Pillow rendering: EXIF orientation, crop/fit/padding,
+  800×480 resize, rotation/flip, preview, and an RGB PNG artifact while preserving
+  original image colours (no host-side palette conversion or dithering).
 - [x] Build the dashboard's primary `Upload and display` path: upload one image,
   produce an orientation-aware preview, and make it the latest desired revision
   for the selected display.
-- [x] Add a faithful final-resolution seven-colour preview that shares the exact
-  renderer settings and physical display orientation used by the artifact.
+- [x] Add a final-resolution RGB preview that shares the exact resize and physical
+  display orientation used by the artifact.
 - [x] Add a display settings view for landscape/portrait orientation, rotation,
   framing defaults, and a clear current-display status.
 - [x] Add display progress and result states for render, download, physical refresh,
@@ -82,8 +87,8 @@ Open implementation risks are hardware/library compatibility on the Pi Zero W, t
 - [x] Build the gallery with stored-image metadata, faithful previews, `display
   now`, single deletion, multi-select, bulk deletion, confirmation, and an undo or
   soft-delete period.
-- [x] Protect active/current album and display content from ambiguous deletion;
-  retain sufficient audit history to explain the result.
+- [x] Allow deletion of every gallery image, including active/current album and
+  display content; retain soft-delete recovery and sufficient audit history.
 - [x] Build album creation and editing: name, ordered images, reorder, add/remove
   gallery items, target display, and orientation-aware item previews.
 - [x] Add album run/stop control, sequential/shuffle mode, per-item interval,
@@ -95,17 +100,17 @@ Open implementation risks are hardware/library compatibility on the Pi Zero W, t
 
 ### Phase 2 — Pi agent vertical slice
 
-- [ ] Scaffold the single-service Python agent and configuration loading without logging the device token.
-- [ ] Configure the agent for its fixed display target; do not implement display
+- [x] Scaffold the single-service Python agent and configuration loading without logging the device token.
+- [x] Configure the agent for its fixed display target; do not implement display
   discovery or capability registration.
-- [ ] Implement simple trusted-LAN HTTP polling, heartbeat, timeout handling, and
+- [x] Implement simple trusted-LAN HTTP polling, heartbeat, timeout handling, and
   exponential backoff. Keep bearer-token support optional; HTTPS and stronger
   security are deferred.
-- [ ] Implement checksum/dimension validation and crash-safe atomic artifact replacement in `/var/lib/inky-agent/`.
-- [ ] Implement a single serialized hardware worker guarded by a lock.
-- [ ] Implement `started`, `completed`, and `failed` reporting, including uncertain completion handling.
-- [ ] Implement cached-image startup and offline operation.
-- [ ] Add the systemd unit, restart policy, watchdog guidance, and Pi installation script.
+- [x] Implement checksum/dimension validation and crash-safe atomic artifact replacement in `/var/lib/inky-agent/`.
+- [x] Implement a single serialized hardware worker guarded by a lock.
+- [x] Implement `started`, `completed`, and `failed` reporting, including uncertain completion handling.
+- [x] Implement cached-image startup and offline operation.
+- [x] Add the systemd unit, restart policy, watchdog guidance, and Pi installation script.
 
 ### Phase 3 — Reliability and operations
 
@@ -115,15 +120,14 @@ Open implementation risks are hardware/library compatibility on the Pi Zero W, t
 - [ ] Add PostgreSQL, Alembic migrations, Redis, and a dedicated worker when multi-display or durable queue requirements appear.
 - [ ] Add Docker Compose services, persistent volumes, non-root containers where practical, health checks, and resource limits.
 - [ ] Add display status dashboard data, metrics, structured audit history, and backup/restore procedures.
-- [ ] Add optional creative seven-colour filter presets as separately versioned
-  render settings; each must retain the original image and show a faithful preview.
 
 ### Phase 4 — Verification and optimization
 
-- [ ] Add unit tests for sizing, seven-colour palette conversion, dithering, cache keys, checksums, and artifact corruption.
+- [ ] Add unit tests for sizing, RGB colour preservation, cache keys, checksums,
+  and artifact corruption.
 - [ ] Add UI and integration tests proving that preview orientation and render
   artifact orientation match for dashboard, gallery, and album workflows.
-- [ ] Add tests for bulk deletion, active-content protection, soft-delete recovery,
+- [ ] Add tests for bulk deletion, active-content deletion, soft-delete recovery,
   album ordering/shuffle, run/stop, and interval/schedule behaviour.
 - [ ] Add API contract tests shared by host and agent.
 - [ ] Add worker lease/retry and schedule/time-zone tests.
@@ -131,8 +135,13 @@ Open implementation risks are hardware/library compatibility on the Pi Zero W, t
 - [ ] Add Inky mock tests, Docker startup/health tests, and an end-to-end mock-display test.
 - [ ] Run a Pi 4 smoke test and measure actual Pi Zero W download/decode/refresh timings.
 - [ ] Verify GPIO, SPI, I²C, EEPROM identification, and E673 behaviour on the physical display.
-- [ ] Decide whether the packed seven-colour artifact format is justified; implement it only behind a tested adapter.
 
 ## Definition of done for the first milestone
 
-One configured Pi can poll the host, receive a newer immutable 800×480 seven-colour paletted PNG, verify its checksum, display it once through Inky, acknowledge the job, and recover to the latest desired revision after network loss or reboot. The dashboard supports an orientation-aware `Upload and display` flow with a faithful final-resolution preview. Uploads, artifacts, and local cache writes are durable and atomic, and the behaviour is covered by automated tests plus a real hardware smoke test.
+One configured Pi can poll the host, receive a newer immutable 800×480 RGB PNG,
+verify its checksum and dimensions, display it once through Inky, acknowledge the
+job, and recover to the latest desired revision after network loss or reboot. The
+dashboard supports an orientation-aware `Upload and display` flow with an exact
+final-resolution RGB preview. Uploads, artifacts, and local cache writes are
+durable and atomic, and the behaviour is covered by automated tests plus a real
+hardware smoke test.

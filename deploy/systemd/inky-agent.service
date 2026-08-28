@@ -1,0 +1,22 @@
+[Unit]
+Description=Inky fixed E673 display agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+User=inky
+Group=inky
+SupplementaryGroups=spi i2c gpio
+EnvironmentFile=-/etc/inky-agent/config.env
+WorkingDirectory=/opt/inky-agent/app
+ExecStart=/opt/inky-agent/venv/bin/inky-pi-agent
+Restart=always
+RestartSec=10
+WatchdogSec=90
+StateDirectory=inky-agent
+StateDirectoryMode=0750
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

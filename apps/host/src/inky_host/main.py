@@ -30,7 +30,7 @@ from inky_contract import (
     RenderSettings,
 )
 
-from .albums import AlbumScheduler, album_response, deletion_blockers
+from .albums import AlbumScheduler, album_response
 from .api_models import (
     ActivityResponse,
     AlbumCreate,
@@ -88,26 +88,16 @@ def _asset_response(asset: AssetRecord, preview_url: str | None = None) -> Asset
     )
 
 
-def _soft_delete_assets(asset_ids: list[str], request: Request, *, fail_on_blocked: bool) -> DeleteResult:
+def _soft_delete_assets(asset_ids: list[str], request: Request) -> DeleteResult:
     sessions: sessionmaker[Session] = request.app.state.sessions
     with sessions() as session:
         assets = {asset_id: session.get(AssetRecord, asset_id) for asset_id in asset_ids}
         missing = [asset_id for asset_id, asset in assets.items() if asset is None]
         if missing:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more assets were not found")
-        blocked = {
-            asset_id: deletion_blockers(session, asset)
-            for asset_id, asset in assets.items()
-            if asset is not None and asset.deleted_at is None and deletion_blockers(session, asset)
-        }
-        if fail_on_blocked and blocked:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"message": "Asset is still in use", "blocked": blocked},
-            )
         deleted_ids: list[str] = []
         for asset_id, asset in assets.items():
-            if asset is None or asset.deleted_at is not None or asset_id in blocked:
+            if asset is None or asset.deleted_at is not None:
                 continue
             asset.deleted_at = utc_now()
             deleted_ids.append(asset_id)
@@ -118,7 +108,7 @@ def _soft_delete_assets(asset_ids: list[str], request: Request, *, fail_on_block
                 asset_id=asset.id,
             )
         session.commit()
-        return DeleteResult(deleted_ids=deleted_ids, blocked=blocked)
+        return DeleteResult(deleted_ids=deleted_ids)
 
 
 def _job_response(session: Session, job: DisplayJobRecord) -> JobResponse:
@@ -366,20 +356,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 query = query.where(AssetRecord.deleted_at.is_(None))
             assets = session.scalars(query).all()
             return [
-                _asset_response(
-                    asset,
-                    f"/api/v1/assets/{asset.id}/preview" if asset.width is not None else None,
-                ).model_copy(update={"deletion_blockers": deletion_blockers(session, asset)})
+                _asset_response(asset, f"/api/v1/assets/{asset.id}/preview" if asset.width is not None else None)
                 for asset in assets
             ]
 
     @app.delete("/api/v1/assets/{asset_id}", response_model=DeleteResult)
     def delete_asset(asset_id: str, request: Request) -> DeleteResult:
-        return _soft_delete_assets([asset_id], request, fail_on_blocked=True)
+        return _soft_delete_assets([asset_id], request)
 
     @app.post("/api/v1/assets/bulk-delete", response_model=DeleteResult)
     def bulk_delete_assets(body: BulkDeleteRequest, request: Request) -> DeleteResult:
-        return _soft_delete_assets([str(asset_id) for asset_id in body.asset_ids], request, fail_on_blocked=False)
+        return _soft_delete_assets([str(asset_id) for asset_id in body.asset_ids], request)
 
     @app.post("/api/v1/assets/{asset_id}/restore", response_model=AssetResponse)
     def restore_asset(asset_id: str, request: Request) -> AssetResponse:
@@ -701,7 +688,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 artifact=ArtifactDescriptor(
                     sha256=artifact.sha256,
                     url=f"/api/v1/artifacts/{artifact.sha256}",
-                    format=ArtifactFormat.PALETTED_PNG,
+                    format=ArtifactFormat.RGB_PNG,
                     width=artifact.width,
                     height=artifact.height,
                     palette=tuple(profile_from_record(display).palette),

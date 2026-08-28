@@ -54,7 +54,9 @@ def test_health_and_upload_to_desired_state(tmp_path: Path) -> None:
         assert desired.status_code == 200
         payload = desired.json()
         assert payload["artifact"]["width"] == 800
-        assert client.get(payload["artifact"]["url"], headers=headers).status_code == 200
+        assert payload["artifact"]["format"] == "rgb-png"
+        artifact = Image.open(BytesIO(client.get(payload["artifact"]["url"], headers=headers).content))
+        assert artifact.mode == "RGB"
 
         started = JobAcknowledgement(event=JobEvent.STARTED, occurred_at="2026-01-01T00:00:00Z")
         assert (
@@ -160,7 +162,7 @@ def test_portrait_setting_changes_the_browser_preview_orientation(tmp_path: Path
         assert preview.size == (480, 800)
 
 
-def test_gallery_album_lifecycle_and_safe_soft_delete(tmp_path: Path) -> None:
+def test_gallery_album_lifecycle_allows_soft_delete_of_active_content(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path / "data", environment="test")
     with TestClient(create_app(settings)) as client:
         first = client.post(
@@ -187,17 +189,17 @@ def test_gallery_album_lifecycle_and_safe_soft_delete(tmp_path: Path) -> None:
         assert running.status_code == 200
         assert running.json()["is_running"] is True
 
-        blocked = client.delete(f"/api/v1/assets/{first['id']}")
-        assert blocked.status_code == 409
-        assert "running album" in str(blocked.json())
+        deleted_first = client.delete(f"/api/v1/assets/{first['id']}")
+        assert deleted_first.status_code == 200
+        assert deleted_first.json()["deleted_ids"] == [first["id"]]
 
         assert client.post(f"/api/v1/albums/{album_id}/stop").status_code == 200
         deleted = client.post("/api/v1/assets/bulk-delete", json={"asset_ids": [second["id"]]})
         assert deleted.status_code == 200
         assert deleted.json()["deleted_ids"] == [second["id"]]
-        assert [asset["id"] for asset in client.get("/api/v1/assets").json()] == [first["id"]]
+        assert client.get("/api/v1/assets").json() == []
 
         restored = client.post(f"/api/v1/assets/{second['id']}/restore")
         assert restored.status_code == 200
-        assert len(client.get("/api/v1/assets").json()) == 2
+        assert [asset["id"] for asset in client.get("/api/v1/assets").json()] == [second["id"]]
         assert any(event["event_type"] == "album.started" for event in client.get("/api/v1/activity").json())

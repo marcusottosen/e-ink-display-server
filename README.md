@@ -7,14 +7,14 @@ hardware refreshes.
 
 ## Current status
 
-The host prototype is implemented through Phase 1.5: upload and deterministic
-seven-colour rendering, display-now, gallery, albums, activity history, and a
-browser UI. The Pi agent remains the next phase.
+The host and Pi-agent prototypes are implemented through Phase 2: full-colour
+final-resolution resizing, display-now, gallery, albums, activity history, and a
+fixed outbound Pi agent with durable local state.
 
 ## Project layout
 
 - `apps/host/` — future FastAPI host and frontend.
-- `apps/pi-agent/` — future Raspberry Pi service.
+- `apps/pi-agent/` — fixed Raspberry Pi polling service and durable local spool.
 - `packages/contract/` — shared Pydantic models and API/artifact contract.
 - `deploy/docker/` — Docker-based development tooling.
 - `deploy/systemd/` — future Pi service installation files.
@@ -72,6 +72,15 @@ The server is configured for a fixed display profile in its host settings. It
 defines the 800 × 480, seven-colour target and its default physical orientation.
 The Pi does not discover or report display model/capabilities to the server.
 Physical orientation and rotation are persisted through the Settings page.
+
+## Pi agent
+
+The Pi only needs the Docker host's LAN URL and port; it makes all outbound
+requests and the host never connects to the Pi. Install the service from a copy of
+this repository using the instructions in
+[`apps/pi-agent/README.md`](apps/pi-agent/README.md). The host produces an RGB
+PNG at the final panel resolution and preserves source colours; the physical Inky
+driver performs its unavoidable limited-colour mapping only at refresh time.
 
 ## Contract
 

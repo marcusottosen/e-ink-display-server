@@ -54,7 +54,7 @@ completion acknowledgement must not discard the artifact.
   "artifact": {
     "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     "url": "/api/v1/artifacts/ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-    "format": "paletted-png",
+  "format": "rgb-png",
     "media_type": "image/png",
     "width": 800,
     "height": 480,
@@ -68,13 +68,14 @@ completion acknowledgement must not discard the artifact.
 
 ## Artifact requirements
 
-- The initial format is a paletted PNG with `Content-Type: image/png`.
+- The initial format is a full-colour RGB PNG with `Content-Type: image/png`.
 - Its dimensions must match the configured fixed display profile.
 - The agent downloads bytes, verifies SHA-256 against `artifact.sha256`, decodes the
-  image, validates dimensions, then writes it atomically into its local spool.
+  RGB image, validates dimensions, then writes it atomically into its local spool.
 - Artifact URLs return binary bytes; image data is never embedded as base64 in JSON.
-- The renderer version, palette, display profile, and render settings are part of
-  the server artifact cache identity.
+- The renderer version, display profile, and render settings are part of the server
+  artifact cache identity. The retained `dither_mode` field is ignored while the
+  host preserves source colours.
 
 ## Host UI request
 

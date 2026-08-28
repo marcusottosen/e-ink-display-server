@@ -1,3 +1,4 @@
+from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
@@ -26,7 +27,7 @@ def profile(rotation: DisplayRotation = DisplayRotation.DEGREES_0) -> DisplayPro
     )
 
 
-def test_render_is_deterministic_and_paletted(tmp_path: Path) -> None:
+def test_render_is_deterministic_and_preserves_rgb_colour(tmp_path: Path) -> None:
     source = tmp_path / "source.png"
     Image.new("RGB", (1200, 700), (120, 70, 220)).save(source)
 
@@ -36,6 +37,9 @@ def test_render_is_deterministic_and_paletted(tmp_path: Path) -> None:
     assert first.content == second.content
     assert first.sha256 == second.sha256
     assert (first.width, first.height) == (800, 480)
+    artifact = Image.open(BytesIO(first.content))
+    assert artifact.mode == "RGB"
+    assert artifact.getpixel((0, 0)) == (120, 70, 220)
 
 
 def test_rotation_changes_the_cache_key_and_retains_hardware_dimensions(tmp_path: Path) -> None:

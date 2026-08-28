@@ -51,7 +51,7 @@ class DitherMode(StrEnum):
 
 
 class ArtifactFormat(StrEnum):
-    PALETTED_PNG = "paletted-png"
+    RGB_PNG = "rgb-png"
 
 
 class JobEvent(StrEnum):
@@ -66,7 +66,9 @@ class RenderSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     fit_mode: FitMode = FitMode.CROP
-    dither_mode: DitherMode = DitherMode.FLOYD_STEINBERG
+    # Kept only so existing saved render settings remain readable. The host no
+    # longer performs palette conversion or dithering, so this has no effect.
+    dither_mode: DitherMode = DitherMode.NONE
     content_rotation: DisplayRotation = DisplayRotation.DEGREES_0
     focal_point_x: Annotated[float, Field(ge=0, le=1)] = 0.5
     focal_point_y: Annotated[float, Field(ge=0, le=1)] = 0.5

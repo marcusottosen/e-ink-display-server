@@ -15,20 +15,18 @@ from .api_models import AlbumItemResponse, AlbumOrderMode, AlbumResponse, AssetR
 from .database import (
     AlbumItemRecord,
     AlbumRecord,
-    ArtifactRecord,
     AssetRecord,
-    DisplayJobRecord,
     DisplayRecord,
     record_activity,
 )
-from .worker import JobStatus, RenderWorker, create_display_now_job
+from .worker import RenderWorker, create_display_now_job
 
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def asset_response(asset: AssetRecord, blockers: list[str] | None = None) -> AssetResponse:
+def asset_response(asset: AssetRecord) -> AssetResponse:
     return AssetResponse(
         id=asset.id,
         original_filename=asset.original_filename,
@@ -40,46 +38,7 @@ def asset_response(asset: AssetRecord, blockers: list[str] | None = None) -> Ass
         created_at=asset.created_at,
         deleted_at=asset.deleted_at,
         preview_url=f"/api/v1/assets/{asset.id}/preview" if asset.width is not None else None,
-        deletion_blockers=blockers or [],
     )
-
-
-def deletion_blockers(session: Session, asset: AssetRecord) -> list[str]:
-    """Return active references that make a soft delete ambiguous or unsafe."""
-
-    blockers: list[str] = []
-    running_albums = session.scalars(
-        select(AlbumRecord.name)
-        .join(AlbumItemRecord, AlbumItemRecord.album_id == AlbumRecord.id)
-        .where(AlbumItemRecord.asset_id == asset.id, AlbumRecord.is_running.is_(True))
-    ).all()
-    blockers.extend(f"used by running album: {name}" for name in running_albums)
-
-    displays = session.scalars(select(DisplayRecord)).all()
-    for display in displays:
-        if display.desired_artifact_id:
-            artifact = session.get(ArtifactRecord, display.desired_artifact_id)
-            if artifact and artifact.asset_id == asset.id:
-                blockers.append(f"currently desired on display: {display.name}")
-        if display.current_revision:
-            current_job = session.scalar(
-                select(DisplayJobRecord).where(
-                    DisplayJobRecord.display_id == display.id,
-                    DisplayJobRecord.revision == display.current_revision,
-                )
-            )
-            if current_job and current_job.asset_id == asset.id:
-                blockers.append(f"currently shown on display: {display.name}")
-
-    active_job = session.scalar(
-        select(DisplayJobRecord.id).where(
-            DisplayJobRecord.asset_id == asset.id,
-            DisplayJobRecord.status.in_([JobStatus.QUEUED, JobStatus.RENDERING, JobStatus.READY, JobStatus.STARTED]),
-        )
-    )
-    if active_job:
-        blockers.append("used by an active display job")
-    return list(dict.fromkeys(blockers))
 
 
 def album_response(session: Session, album: AlbumRecord) -> AlbumResponse:
