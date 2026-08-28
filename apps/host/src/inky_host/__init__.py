@@ -1,2 +1,1 @@
 """Docker host application package."""
-

@@ -74,4 +74,3 @@ def test_heartbeat_rejects_an_invalid_checksum() -> None:
             last_successful_artifact_sha256="not-a-checksum",
             sent_at=datetime.now(UTC),
         )
-

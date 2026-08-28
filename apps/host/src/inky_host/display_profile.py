@@ -31,4 +31,3 @@ FIXED_DISPLAY_PROFILE = DisplayProfile(
     default_render_settings=RenderSettings(),
     time_zone="Europe/Copenhagen",
 )
-

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Inky Display</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">INKY DISPLAY</p>
+        <h1>Show something new</h1>
+        <p class="subtitle">Upload one image to render and send it to your e-ink display.</p>
+      </header>
+
+      <section class="card" aria-labelledby="upload-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">DASHBOARD</p>
+            <h2 id="upload-title">Upload and display</h2>
+          </div>
+          <span id="connection-status" class="status neutral">Checking display…</span>
+        </div>
+        <form id="upload-form">
+          <label class="file-picker" for="image-file">
+            <input id="image-file" name="file" type="file" accept="image/jpeg,image/png,image/webp" required>
+            <span id="file-label">Choose a JPEG, PNG, or WebP</span>
+          </label>
+          <div class="controls">
+            <label>Framing
+              <select id="fit-mode">
+                <option value="crop">Crop to fill</option>
+                <option value="contain">Fit with white border</option>
+                <option value="stretch">Stretch</option>
+              </select>
+            </label>
+            <label>Dithering
+              <select id="dither-mode">
+                <option value="floyd-steinberg">Soft dither</option>
+                <option value="none">No dither</option>
+              </select>
+            </label>
+          </div>
+          <button id="submit-button" type="submit">Upload and display</button>
+        </form>
+        <p id="job-message" class="message" aria-live="polite">Choose an image to begin.</p>
+      </section>
+
+      <section class="grid">
+        <article class="card preview-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">FAITHFUL PREVIEW</p>
+              <h2>Panel output</h2>
+            </div>
+            <span id="preview-meta" class="muted">800 × 480</span>
+          </div>
+          <div id="preview-frame" class="preview-frame landscape">
+            <img id="preview" alt="Rendered e-ink display preview" hidden>
+            <p id="preview-placeholder">The final seven-colour panel preview appears here.</p>
+          </div>
+        </article>
+
+        <article class="card" aria-labelledby="settings-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">DISPLAY</p>
+              <h2 id="settings-title">Panel settings</h2>
+            </div>
+          </div>
+          <form id="settings-form">
+            <label>Physical orientation
+              <select id="orientation">
+                <option value="landscape">Landscape</option>
+                <option value="portrait">Portrait</option>
+              </select>
+            </label>
+            <label>Panel rotation
+              <select id="rotation">
+                <option value="0">0°</option>
+                <option value="90">90°</option>
+                <option value="180">180°</option>
+                <option value="270">270°</option>
+              </select>
+            </label>
+            <button class="secondary" type="submit">Save panel settings</button>
+          </form>
+          <dl id="display-details" class="details"></dl>
+        </article>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+

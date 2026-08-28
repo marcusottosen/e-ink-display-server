@@ -5,6 +5,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
+      target: tools
     working_dir: /workspace
     environment:
       INKY_ENV: ${INKY_ENV:-development}
@@ -13,8 +14,30 @@ services:
       - ../..:/workspace
       - inky-python-venv:/opt/inky-venv
     command: ["--version"]
+    profiles: ["tools"]
+  host:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      target: host
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      INKY_DATA_DIR: /var/lib/inky
+    ports:
+      - "${INKY_HOST_PORT:-8000}:8000"
+    volumes:
+      - inky-host-data:/var/lib/inky
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
 volumes:
   inky-python-venv:
     name: inky-python-venv
-
+  inky-host-data:
+    name: inky-host-data

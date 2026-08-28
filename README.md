@@ -37,7 +37,7 @@ the Docker tooling container:
 ```bash
 cp .env.example .env
 docker compose -f deploy/docker/compose.yaml run --rm tools sync --all-packages --group dev
-docker compose -f deploy/docker/compose.yaml run --rm tools run --package inky-contract pytest tests/contract
+docker compose -f deploy/docker/compose.yaml run --rm tools run --package inky-host pytest tests/contract tests/host
 ```
 
 The dependency resolver writes `uv.lock` at the repository root. Commit that file
@@ -52,6 +52,19 @@ docker compose -f deploy/docker/compose.yaml --env-file .env config
 The development container mounts the repository and keeps its virtual environment
 in the named `inky-python-venv` volume, so Python dependencies do not pollute the
 LXC.
+
+## Run the host
+
+Start the single-display host with a persistent Docker volume:
+
+```bash
+docker compose -f deploy/docker/compose.yaml up -d --build host
+```
+
+Open `http://<host>:8000` for the dashboard and `http://<host>:8000/health` for
+the health check. The host stores SQLite state, uploads, previews, and artifacts in
+the named `inky-host-data` volume. For development, copy `.env.example` to `.env`
+and replace the agent token before connecting a Pi.
 
 ## Fixed display configuration
 
@@ -72,4 +85,3 @@ be defined.
 
 This repository is currently source-available for its owner only. All rights are
 reserved until an explicit open-source license is chosen.
-

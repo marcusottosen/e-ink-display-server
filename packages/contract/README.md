@@ -23,8 +23,9 @@ The Pi's requests identify only its already-known display route and authenticate
 with its device token.
 
 **Display orientation** describes the installed panel direction. **Content framing**
-describes how an image is treated (crop, fit, focal point, flips). A host preview and
-the delivered artifact must apply both sets of settings in the same order.
+describes how an image is treated (crop, fit, content rotation, focal point, flips).
+A host preview and the delivered artifact must apply both sets of settings in the
+same order.
 
 ## Agent endpoints
 
@@ -84,6 +85,7 @@ completion acknowledgement must not discard the artifact.
   "render_settings": {
     "fit_mode": "crop",
     "dither_mode": "floyd-steinberg",
+    "content_rotation": 0,
     "focal_point_x": 0.5,
     "focal_point_y": 0.5,
     "flip_horizontal": false,
@@ -94,4 +96,3 @@ completion acknowledgement must not discard the artifact.
 
 Omitting `render_settings` uses the fixed profile defaults. The host renders first,
 then atomically sets the produced artifact as the latest desired revision.
-

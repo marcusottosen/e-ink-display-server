@@ -59,23 +59,23 @@ Open implementation risks are hardware/library compatibility on the Pi Zero W, t
 
 ### Phase 1 — Host vertical slice
 
-- [ ] Scaffold the FastAPI host and health endpoint.
-- [ ] Implement configuration and structured logging with correlation IDs.
-- [ ] Implement asset upload validation, SHA-256 hashing, and persistent original storage.
-- [ ] Implement deterministic Pillow rendering: EXIF orientation, crop/fit/padding, 800×480 resize, palette conversion, dithering, rotation/flip, preview, and paletted PNG artifact.
-- [ ] Build the dashboard's primary `Upload and display` path: upload one image,
+- [x] Scaffold the FastAPI host and health endpoint.
+- [x] Implement configuration and structured logging with correlation IDs.
+- [x] Implement asset upload validation, SHA-256 hashing, and persistent original storage.
+- [x] Implement deterministic Pillow rendering: EXIF orientation, crop/fit/padding, 800×480 resize, palette conversion, dithering, rotation/flip, preview, and paletted PNG artifact.
+- [x] Build the dashboard's primary `Upload and display` path: upload one image,
   produce an orientation-aware preview, and make it the latest desired revision
   for the selected display.
-- [ ] Add a faithful final-resolution seven-colour preview that shares the exact
+- [x] Add a faithful final-resolution seven-colour preview that shares the exact
   renderer settings and physical display orientation used by the artifact.
-- [ ] Add a display settings view for landscape/portrait orientation, rotation,
+- [x] Add a display settings view for landscape/portrait orientation, rotation,
   framing defaults, and a clear current-display status.
-- [ ] Add display progress and result states for render, download, physical refresh,
+- [x] Add display progress and result states for render, download, physical refresh,
   completion, offline, and failure conditions.
-- [ ] Add renderer versioning and content-addressed artifact caching.
-- [ ] Add one fixed display record, token hashing, heartbeat, and desired revision state.
-- [ ] Implement `display-now`, desired-state lookup, binary artifact download, and job acknowledgements.
-- [ ] Start with SQLite and a process-local worker for the single-display prototype; keep interfaces ready for PostgreSQL/Redis.
+- [x] Add renderer versioning and content-addressed artifact caching.
+- [x] Add one fixed display record, token hashing, heartbeat, and desired revision state.
+- [x] Implement `display-now`, desired-state lookup, binary artifact download, and job acknowledgements.
+- [x] Start with SQLite and a process-local worker for the single-display prototype; keep interfaces ready for PostgreSQL/Redis.
 
 ### Phase 1.5 — Gallery and albums
 

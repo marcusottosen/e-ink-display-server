@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Docker-hosted controller and Raspberry Pi agent for an Inky display"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
-license = { file = "LICENSE" }
+license = { text = "All rights reserved" }
 authors = [{ name = "Inky Display System maintainers" }]
 
 [tool.uv.workspace]
@@ -24,11 +24,14 @@ testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py311"
-line-length = 100
+line-length = 120
 src = ["apps/host/src", "apps/pi-agent/src", "packages/contract/src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"apps/host/src/inky_host/main.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -36,4 +39,3 @@ strict = true
 warn_unreachable = true
 packages = ["inky_contract"]
 mypy_path = ["packages/contract/src"]
-

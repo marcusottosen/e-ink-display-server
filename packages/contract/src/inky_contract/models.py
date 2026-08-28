@@ -67,6 +67,7 @@ class RenderSettings(BaseModel):
 
     fit_mode: FitMode = FitMode.CROP
     dither_mode: DitherMode = DitherMode.FLOYD_STEINBERG
+    content_rotation: DisplayRotation = DisplayRotation.DEGREES_0
     focal_point_x: Annotated[float, Field(ge=0, le=1)] = 0.5
     focal_point_y: Annotated[float, Field(ge=0, le=1)] = 0.5
     flip_horizontal: bool = False
