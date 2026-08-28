@@ -1,0 +1,22 @@
+[project]
+name = "inky-host"
+version = "0.1.0"
+description = "Docker-hosted control service for the Inky display system"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "inky-contract",
+    "pydantic-settings>=2.7,<3",
+    "sqlalchemy>=2.0,<3",
+    "uvicorn[standard]>=0.32,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/inky_host"]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+inky-contract = { workspace = true }

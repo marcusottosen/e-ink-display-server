@@ -1,0 +1,20 @@
+name: inky
+
+services:
+  tools:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    working_dir: /workspace
+    environment:
+      INKY_ENV: ${INKY_ENV:-development}
+      UV_PROJECT_ENVIRONMENT: /opt/inky-venv
+    volumes:
+      - ../..:/workspace
+      - inky-python-venv:/opt/inky-venv
+    command: ["--version"]
+
+volumes:
+  inky-python-venv:
+    name: inky-python-venv
+

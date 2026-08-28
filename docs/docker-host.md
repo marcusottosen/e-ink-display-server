@@ -25,6 +25,90 @@ The host should be the only side that performs expensive or extensible computati
 
 The frontend can initially be served by the backend or a small separate web container.
 
+## Frontend product requirements
+
+The first frontend should be a focused control panel for one display, while keeping
+the information model ready for multiple displays. The server owns a fixed display
+profile for each configured agent; the Pi does not need to identify or report its
+display model. The frontend must use the same renderer and display profile as
+artifact delivery: a preview is a faithful representation of what will be sent to
+the panel, not a browser-only approximation.
+
+### Dashboard: upload and show
+
+- Provide an `Upload and display` action as the primary path: select or drop one
+  image, render it with the selected display settings, and make it the latest
+  desired revision for the chosen display.
+- For a single configured display, select it by default. For multiple displays,
+  require a visible display selection before the action is submitted.
+- Show rendering, download, refresh, completion, and failure status. A full E673
+  refresh is slow, so the UI must set expectations rather than implying an
+  immediate screen change.
+- Keep the uploaded original and rendered artifact in the gallery. Do not make a
+  one-off display action an ephemeral upload.
+- Allow the user to review the faithful preview and adjust display settings before
+  sending it; `Upload and display` may use the current defaults when no adjustment
+  is needed.
+
+### Display orientation and render settings
+
+- Each configured display has a current physical orientation: landscape or portrait, with a
+  corresponding 0°, 90°, 180°, or 270° rotation where the hardware installation
+  requires it.
+- The orientation is a display-level setting and is applied consistently to
+  dashboard previews, gallery previews, album previews, render artifacts, and
+  display actions. It must never silently change an original asset.
+- Expose per-render framing controls: crop, fit, padding, focal point, rotation,
+  and optional flip. Clearly distinguish these content settings from the physical
+  display orientation.
+- Preview the final 800 × 480 display raster at the configured orientation, with
+  a visible indication of any crop or padding. Support both landscape and portrait
+  installations.
+
+### Gallery
+
+- List all stored original images with thumbnail, filename, upload date, source
+  dimensions, and the most recent rendered/displayed state.
+- Allow opening an image to inspect its full seven-colour, display-resolution
+  preview and to display it immediately using the current display settings.
+- Support multi-select and bulk deletion as well as single-image deletion.
+- Require confirmation for deletion and state whether an image is currently used
+  by a running album or is the current display artifact. Preserve audit history and
+  either prevent unsafe deletion or require an explicit replacement choice.
+- Prefer a recoverable soft-delete/undo period before permanent storage cleanup.
+
+### Albums
+
+- Provide an album page to create, rename, reorder, and delete albums; add or
+  remove existing gallery images; and inspect the rendered preview for each item.
+- Each album has a `Run` action that makes the album the desired display program,
+  plus `Stop`/replace behaviour that returns control to a single image or another
+  album.
+- Album settings include target display, sequential or shuffled order, interval,
+  start image, enabled state, time zone, optional schedule, and the default
+  framing/render settings for its items.
+- Apply the display's physical orientation to every album preview and generated
+  artifact. Per-image overrides should be possible later; album defaults are
+  sufficient for the first album release.
+
+### Future creative rendering
+
+- Add a later, optional creative filter collection designed for the panel's
+  seven-colour palette. These presets may deliberately stylize an image beyond
+  accurate palette conversion.
+- A filter selection must create a separately versioned render setting, show a
+  faithful final-resolution preview before display, and never overwrite the
+  original upload.
+
+### Fitting supporting features
+
+- Display status card: connection state, last heartbeat, current/desired revision,
+  last successful refresh, and the latest error with a retry action where safe.
+- Recent activity/history: who uploaded, rendered, displayed, ran, stopped, or
+  deleted content, including job outcome and timestamps.
+- Empty, loading, offline, and failed states designed for a household control
+  panel, with clear recovery actions and no lost work after a refresh.
+
 ### Storage and jobs
 
 - PostgreSQL for durable application data
@@ -63,13 +147,14 @@ For a first single-display prototype, `web`, an in-process worker, SQLite, and l
 - Image upload and validation
 - Original image storage
 - Image rendering and preview generation
-- Display registration and capability tracking
+- Fixed display configuration and agent authentication
 - Desired display revision management
 - Playlists, loops, and schedules
 - Job leases and retry handling
 - Artifact delivery
 - Display health/status dashboard
 - Audit history for image and schedule changes
+- Faithful, orientation-aware previews and frontend content management
 
 The server is authoritative for the desired state. A display that is offline should receive the latest valid desired revision after reconnecting rather than an unbounded backlog of obsolete jobs.
 
@@ -81,7 +166,7 @@ For each requested display image:
 2. Normalize EXIF orientation and colour profile.
 3. Apply the configured crop, fit, stretch, or padding mode.
 4. Resize to 800 x 480.
-5. Convert to the E673 six-colour palette.
+5. Convert to the E673 seven-colour palette, including white.
 6. Apply the selected dithering strategy.
 7. Apply rotation or flip settings if configured.
 8. Produce a browser preview.
@@ -99,14 +184,13 @@ The first artifact format should be an 800 x 480 paletted PNG. A later optimized
 - `id`
 - `name`
 - `device_token_hash`
-- `model`
-- `resolution`
-- `palette`
 - `agent_version`
 - `last_seen_at`
 - `last_error`
 - `current_revision`
 - `desired_revision`
+- Server-configured resolution, palette, physical orientation, and rotation
+- Server-configured default render/framing settings
 
 ### Assets
 
@@ -117,6 +201,7 @@ The first artifact format should be an 800 x 480 paletted PNG. A later optimized
 - MIME type
 - File size
 - Created timestamp
+- Soft-deleted timestamp, when applicable
 
 ### Rendered artifacts
 
@@ -140,11 +225,13 @@ The first artifact format should be an 800 x 480 paletted PNG. A later optimized
 - Created, started, completed, and failed timestamps
 - Error information
 
-### Schedules/playlists
+### Albums, schedules, and playlists
 
 - Display or display-group target
 - Ordered items
-- Duration or cron-like schedule
+- Sequential or shuffled order
+- Per-item duration and default render settings
+- Optional duration or cron-like schedule
 - Time zone
 - Enabled/disabled state
 - Start/end dates
@@ -155,12 +242,20 @@ The API should expose versioned endpoints similar to:
 
 ```text
 POST /api/v1/assets
+GET  /api/v1/assets
+DELETE /api/v1/assets/{asset_id}
+POST /api/v1/assets/bulk-delete
 POST /api/v1/renders
 GET  /api/v1/assets/{asset_id}/preview
+POST /api/v1/albums
+GET  /api/v1/albums
+PATCH /api/v1/albums/{album_id}
+POST /api/v1/albums/{album_id}/run
+POST /api/v1/albums/{album_id}/stop
 POST /api/v1/displays
 GET  /api/v1/displays
 GET  /api/v1/displays/{display_id}
-POST /api/v1/displays/{display_id}/register
+PATCH /api/v1/displays/{display_id}/settings
 POST /api/v1/displays/{display_id}/display-now
 GET  /api/v1/displays/{display_id}/desired
 GET  /api/v1/artifacts/{sha256}
@@ -234,9 +329,9 @@ A static IP or DHCP reservation for the Docker host is recommended. The Pi shoul
 
 ## Initial implementation order
 
-1. Define the versioned API and artifact contract.
+1. Define the versioned API, fixed display profile, and artifact contract.
 2. Implement upload, storage, and deterministic rendering.
-3. Implement one-display registration and `display-now`.
+3. Configure the fixed single-display record and implement `display-now`.
 4. Implement the Pi polling agent and acknowledgement flow.
 5. Add status, retries, and offline caching.
 6. Add playlists, loops, and time-zone-aware scheduling.

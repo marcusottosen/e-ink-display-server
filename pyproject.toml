@@ -1,0 +1,39 @@
+[project]
+name = "inky-display-workspace"
+version = "0.1.0"
+description = "Docker-hosted controller and Raspberry Pi agent for an Inky display"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { file = "LICENSE" }
+authors = [{ name = "Inky Display System maintainers" }]
+
+[tool.uv.workspace]
+members = ["apps/host", "apps/pi-agent", "packages/contract"]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.16,<2",
+    "pytest>=8.3,<9",
+    "pytest-cov>=6.1,<7",
+    "ruff>=0.11,<1",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["apps/host/src", "apps/pi-agent/src", "packages/contract/src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+packages = ["inky_contract"]
+mypy_path = ["packages/contract/src"]
+

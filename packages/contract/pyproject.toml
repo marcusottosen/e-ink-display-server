@@ -1,0 +1,14 @@
+[project]
+name = "inky-contract"
+version = "0.1.0"
+description = "Versioned shared API and artifact contract for the Inky display system"
+requires-python = ">=3.11,<3.14"
+dependencies = ["pydantic>=2.7,<3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/inky_contract"]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
