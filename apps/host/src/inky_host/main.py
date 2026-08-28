@@ -30,14 +30,35 @@ from inky_contract import (
     RenderSettings,
 )
 
-from .api_models import AssetResponse, DisplayResponse, DisplaySettingsUpdate, JobResponse
+from .albums import AlbumScheduler, album_response, deletion_blockers
+from .api_models import (
+    ActivityResponse,
+    AlbumCreate,
+    AlbumItemsUpdate,
+    AlbumResponse,
+    AlbumUpdate,
+    AssetResponse,
+    BulkDeleteRequest,
+    ConnectionSettingsResponse,
+    ConnectionSettingsUpdate,
+    DeleteResult,
+    DisplayResponse,
+    DisplaySettingsUpdate,
+    JobResponse,
+)
 from .config import Settings
 from .database import (
+    ActivityRecord,
+    AlbumItemRecord,
+    AlbumRecord,
     ArtifactRecord,
     AssetRecord,
+    ConnectionSettingsRecord,
     DisplayJobRecord,
     DisplayRecord,
     create_session_factory,
+    record_activity,
+    utc_now,
 )
 from .observability import configure_logging, request_id_context
 from .profiles import profile_from_record
@@ -59,9 +80,45 @@ def _asset_response(asset: AssetRecord, preview_url: str | None = None) -> Asset
         sha256=asset.sha256,
         mime_type=asset.mime_type,
         file_size=asset.file_size,
+        width=asset.width,
+        height=asset.height,
         created_at=asset.created_at,
+        deleted_at=asset.deleted_at,
         preview_url=preview_url,
     )
+
+
+def _soft_delete_assets(asset_ids: list[str], request: Request, *, fail_on_blocked: bool) -> DeleteResult:
+    sessions: sessionmaker[Session] = request.app.state.sessions
+    with sessions() as session:
+        assets = {asset_id: session.get(AssetRecord, asset_id) for asset_id in asset_ids}
+        missing = [asset_id for asset_id, asset in assets.items() if asset is None]
+        if missing:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more assets were not found")
+        blocked = {
+            asset_id: deletion_blockers(session, asset)
+            for asset_id, asset in assets.items()
+            if asset is not None and asset.deleted_at is None and deletion_blockers(session, asset)
+        }
+        if fail_on_blocked and blocked:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"message": "Asset is still in use", "blocked": blocked},
+            )
+        deleted_ids: list[str] = []
+        for asset_id, asset in assets.items():
+            if asset is None or asset.deleted_at is not None or asset_id in blocked:
+                continue
+            asset.deleted_at = utc_now()
+            deleted_ids.append(asset_id)
+            record_activity(
+                session,
+                "asset.deleted",
+                f"Moved '{asset.original_filename}' to the trash",
+                asset_id=asset.id,
+            )
+        session.commit()
+        return DeleteResult(deleted_ids=deleted_ids, blocked=blocked)
 
 
 def _job_response(session: Session, job: DisplayJobRecord) -> JobResponse:
@@ -116,6 +173,38 @@ def _seed_display(sessions: sessionmaker[Session], settings: Settings) -> None:
         session.commit()
 
 
+def _seed_connection_settings(sessions: sessionmaker[Session], settings: Settings) -> None:
+    with sessions() as session:
+        if session.get(ConnectionSettingsRecord, "default") is not None:
+            return
+        session.add(
+            ConnectionSettingsRecord(
+                id="default",
+                advertised_host=settings.advertised_host.rstrip("/"),
+                advertised_port=settings.advertised_port,
+                agent_poll_interval_seconds=settings.agent_poll_interval_seconds,
+                agent_heartbeat_interval_seconds=settings.agent_heartbeat_interval_seconds,
+                agent_auth_required=settings.agent_auth_required,
+            )
+        )
+        session.commit()
+
+
+def _connection_settings_response(
+    connection: ConnectionSettingsRecord, display_id: str
+) -> ConnectionSettingsResponse:
+    return ConnectionSettingsResponse(
+        display_id=display_id,
+        advertised_host=connection.advertised_host,
+        advertised_port=connection.advertised_port,
+        server_url=f"{connection.advertised_host.rstrip('/')}:{connection.advertised_port}",
+        agent_poll_interval_seconds=connection.agent_poll_interval_seconds,
+        agent_heartbeat_interval_seconds=connection.agent_heartbeat_interval_seconds,
+        agent_auth_required=connection.agent_auth_required,
+        updated_at=connection.updated_at,
+    )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     runtime_settings = settings or Settings()
     configure_logging(runtime_settings.log_level)
@@ -125,16 +214,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         sessions = create_session_factory(runtime_settings)
         storage = Storage(runtime_settings.data_dir)
         _seed_display(sessions, runtime_settings)
+        _seed_connection_settings(sessions, runtime_settings)
         worker = RenderWorker(sessions, storage, runtime_settings.max_source_pixels)
+        album_scheduler = AlbumScheduler(sessions, worker)
         app.state.settings = runtime_settings
         app.state.sessions = sessions
         app.state.storage = storage
         app.state.worker = worker
+        app.state.album_scheduler = album_scheduler
         await worker.start()
+        await album_scheduler.start()
         logger.info("host started", extra={"display_id": runtime_settings.display_id})
         try:
             yield
         finally:
+            await album_scheduler.stop()
             await worker.stop()
             logger.info("host stopped")
 
@@ -161,7 +255,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
         with sessions() as session:
             display = session.get(DisplayRecord, display_id)
-            if display is None or not token or not hmac.compare_digest(display.device_token_hash, _token_hash(token)):
+            connection = session.get(ConnectionSettingsRecord, "default")
+            auth_required = (
+                connection.agent_auth_required if connection is not None else runtime_settings.agent_auth_required
+            )
+            if display is None or (
+                auth_required and (not token or not hmac.compare_digest(display.device_token_hash, _token_hash(token)))
+            ):
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device token")
             session.expunge(display)
             return display
@@ -177,6 +277,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.execute(text("SELECT 1"))
         return {"status": "ok", "database": "ok", "worker": "running"}
 
+    @app.get("/api/v1/settings/connection", response_model=ConnectionSettingsResponse)
+    def get_connection_settings(request: Request) -> ConnectionSettingsResponse:
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            connection = session.get(ConnectionSettingsRecord, "default")
+            if connection is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Connection settings unavailable",
+                )
+            return _connection_settings_response(connection, request.app.state.settings.display_id)
+
+    @app.patch("/api/v1/settings/connection", response_model=ConnectionSettingsResponse)
+    def update_connection_settings(
+        update: ConnectionSettingsUpdate, request: Request
+    ) -> ConnectionSettingsResponse:
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            connection = session.get(ConnectionSettingsRecord, "default")
+            if connection is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Connection settings unavailable",
+                )
+            connection.advertised_host = update.advertised_host.rstrip("/")
+            connection.advertised_port = update.advertised_port
+            connection.agent_poll_interval_seconds = update.agent_poll_interval_seconds
+            connection.agent_heartbeat_interval_seconds = update.agent_heartbeat_interval_seconds
+            connection.agent_auth_required = update.agent_auth_required
+            record_activity(
+                session,
+                "connection.settings-updated",
+                "Updated the Pi-to-host connection settings",
+                display_id=request.app.state.settings.display_id,
+            )
+            session.commit()
+            session.refresh(connection)
+            return _connection_settings_response(connection, request.app.state.settings.display_id)
+
     @app.post("/api/v1/assets", response_model=AssetResponse, status_code=status.HTTP_201_CREATED)
     async def upload_asset(
         request: Request,
@@ -186,16 +325,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         runtime: Settings = request.app.state.settings
         stored = await storage.save_upload(file, runtime.max_upload_bytes)
         sessions: sessionmaker[Session] = request.app.state.sessions
-        asset = AssetRecord(
-            id=str(uuid4()),
-            original_filename=stored.filename,
-            sha256=stored.sha256,
-            storage_path=stored.relative_path,
-            mime_type=stored.mime_type,
-            file_size=stored.file_size,
-        )
         with sessions() as session:
-            session.add(asset)
+            asset = session.scalar(select(AssetRecord).where(AssetRecord.sha256 == stored.sha256))
+            if asset is None:
+                asset = AssetRecord(
+                    id=str(uuid4()),
+                    original_filename=stored.filename,
+                    sha256=stored.sha256,
+                    storage_path=stored.relative_path,
+                    mime_type=stored.mime_type,
+                    file_size=stored.file_size,
+                )
+                session.add(asset)
+                record_activity(
+                    session,
+                    "asset.uploaded",
+                    f"Uploaded '{asset.original_filename}'",
+                    asset_id=asset.id,
+                )
+            elif asset.deleted_at is not None:
+                asset.deleted_at = None
+                record_activity(
+                    session,
+                    "asset.restored-by-upload",
+                    f"Restored '{asset.original_filename}' from a matching upload",
+                    asset_id=asset.id,
+                )
             session.commit()
             session.refresh(asset)
             response = _asset_response(asset)
@@ -203,11 +358,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return response
 
     @app.get("/api/v1/assets", response_model=list[AssetResponse])
-    def list_assets(request: Request) -> list[AssetResponse]:
+    def list_assets(request: Request, include_deleted: bool = False) -> list[AssetResponse]:
         sessions: sessionmaker[Session] = request.app.state.sessions
         with sessions() as session:
-            assets = session.scalars(select(AssetRecord).order_by(desc(AssetRecord.created_at))).all()
-            return [_asset_response(asset, f"/api/v1/assets/{asset.id}/preview") for asset in assets]
+            query = select(AssetRecord).order_by(desc(AssetRecord.created_at))
+            if not include_deleted:
+                query = query.where(AssetRecord.deleted_at.is_(None))
+            assets = session.scalars(query).all()
+            return [
+                _asset_response(
+                    asset,
+                    f"/api/v1/assets/{asset.id}/preview" if asset.width is not None else None,
+                ).model_copy(update={"deletion_blockers": deletion_blockers(session, asset)})
+                for asset in assets
+            ]
+
+    @app.delete("/api/v1/assets/{asset_id}", response_model=DeleteResult)
+    def delete_asset(asset_id: str, request: Request) -> DeleteResult:
+        return _soft_delete_assets([asset_id], request, fail_on_blocked=True)
+
+    @app.post("/api/v1/assets/bulk-delete", response_model=DeleteResult)
+    def bulk_delete_assets(body: BulkDeleteRequest, request: Request) -> DeleteResult:
+        return _soft_delete_assets([str(asset_id) for asset_id in body.asset_ids], request, fail_on_blocked=False)
+
+    @app.post("/api/v1/assets/{asset_id}/restore", response_model=AssetResponse)
+    def restore_asset(asset_id: str, request: Request) -> AssetResponse:
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            asset = session.get(AssetRecord, asset_id)
+            if asset is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+            asset.deleted_at = None
+            record_activity(session, "asset.restored", f"Restored '{asset.original_filename}'", asset_id=asset.id)
+            session.commit()
+            return _asset_response(asset, f"/api/v1/assets/{asset.id}/preview")
 
     @app.get("/api/v1/assets/{asset_id}/preview")
     def asset_preview(asset_id: str, request: Request) -> FileResponse:
@@ -248,9 +432,204 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 display.rotation = int(update.rotation)
             if update.default_render_settings is not None:
                 display.default_render_settings = update.default_render_settings.model_dump(mode="json")
+            record_activity(
+                session,
+                "display.settings-updated",
+                f"Updated settings for display '{display.name}'",
+                display_id=display.id,
+            )
             session.commit()
             session.refresh(display)
             return _display_response(display)
+
+    @app.get("/api/v1/activity", response_model=list[ActivityResponse])
+    def list_activity(request: Request, limit: int = 50) -> list[ActivityResponse]:
+        safe_limit = min(max(limit, 1), 200)
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            events = session.scalars(
+                select(ActivityRecord).order_by(desc(ActivityRecord.created_at)).limit(safe_limit)
+            ).all()
+            return [
+                ActivityResponse(
+                    id=event.id,
+                    event_type=event.event_type,
+                    message=event.message,
+                    display_id=event.display_id,
+                    asset_id=event.asset_id,
+                    album_id=event.album_id,
+                    job_id=event.job_id,
+                    created_at=event.created_at,
+                )
+                for event in events
+            ]
+
+    @app.get("/api/v1/albums", response_model=list[AlbumResponse])
+    def list_albums(request: Request) -> list[AlbumResponse]:
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            albums = session.scalars(select(AlbumRecord).order_by(AlbumRecord.created_at.desc())).all()
+            return [album_response(session, album) for album in albums]
+
+    @app.post("/api/v1/albums", response_model=AlbumResponse, status_code=status.HTTP_201_CREATED)
+    def create_album(body: AlbumCreate, request: Request) -> AlbumResponse:
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            if session.get(DisplayRecord, body.display_id) is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Display not found")
+            if session.scalar(select(AlbumRecord).where(AlbumRecord.name == body.name)) is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Album name already exists")
+            assets = [session.get(AssetRecord, str(asset_id)) for asset_id in body.asset_ids]
+            available_assets = [asset for asset in assets if asset is not None and asset.deleted_at is None]
+            if len(available_assets) != len(assets):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="Albums require available gallery images"
+                )
+            album = AlbumRecord(
+                id=str(uuid4()),
+                display_id=body.display_id,
+                name=body.name,
+                order_mode=body.order_mode.value,
+                interval_seconds=body.interval_seconds,
+                enabled=body.enabled,
+                time_zone=body.time_zone,
+                schedule_start_at=body.schedule_start_at,
+                schedule_end_at=body.schedule_end_at,
+                default_render_settings=body.default_render_settings.model_dump(mode="json"),
+            )
+            session.add(album)
+            session.flush()
+            for position, asset in enumerate(available_assets):
+                session.add(AlbumItemRecord(id=str(uuid4()), album_id=album.id, asset_id=asset.id, position=position))
+            record_activity(
+                session,
+                "album.created",
+                f"Created album '{album.name}'",
+                display_id=album.display_id,
+                album_id=album.id,
+            )
+            session.commit()
+            return album_response(session, album)
+
+    @app.get("/api/v1/albums/{album_id}", response_model=AlbumResponse)
+    def get_album(album_id: str, request: Request) -> AlbumResponse:
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            album = session.get(AlbumRecord, album_id)
+            if album is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found")
+            return album_response(session, album)
+
+    @app.patch("/api/v1/albums/{album_id}", response_model=AlbumResponse)
+    def update_album(album_id: str, body: AlbumUpdate, request: Request) -> AlbumResponse:
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            album = session.get(AlbumRecord, album_id)
+            if album is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found")
+            values = body.model_dump(exclude_unset=True)
+            for field, value in values.items():
+                if field == "order_mode":
+                    value = value.value
+                if field == "default_render_settings":
+                    value = value.model_dump(mode="json")
+                setattr(album, field, value)
+            if album.schedule_start_at and album.schedule_end_at and album.schedule_end_at <= album.schedule_start_at:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="schedule_end_at must be after schedule_start_at",
+                )
+            record_activity(
+                session,
+                "album.updated",
+                f"Updated album '{album.name}'",
+                display_id=album.display_id,
+                album_id=album.id,
+            )
+            session.commit()
+            return album_response(session, album)
+
+    @app.put("/api/v1/albums/{album_id}/items", response_model=AlbumResponse)
+    def replace_album_items(album_id: str, body: AlbumItemsUpdate, request: Request) -> AlbumResponse:
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            album = session.get(AlbumRecord, album_id)
+            if album is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found")
+            assets = [session.get(AssetRecord, str(asset_id)) for asset_id in body.asset_ids]
+            available_assets = [asset for asset in assets if asset is not None and asset.deleted_at is None]
+            if len(available_assets) != len(assets):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="Albums require available gallery images"
+                )
+            existing_items = session.scalars(select(AlbumItemRecord).where(AlbumItemRecord.album_id == album.id)).all()
+            for item in existing_items:
+                session.delete(item)
+            for position, asset in enumerate(available_assets):
+                session.add(AlbumItemRecord(id=str(uuid4()), album_id=album.id, asset_id=asset.id, position=position))
+            album.next_item_index = 0
+            record_activity(
+                session,
+                "album.items-updated",
+                f"Updated items in album '{album.name}'",
+                display_id=album.display_id,
+                album_id=album.id,
+            )
+            session.commit()
+            return album_response(session, album)
+
+    @app.post("/api/v1/albums/{album_id}/run", response_model=AlbumResponse)
+    async def run_album(album_id: str, request: Request) -> AlbumResponse:
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            album = session.get(AlbumRecord, album_id)
+            if album is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found")
+            if not session.scalar(select(AlbumItemRecord.id).where(AlbumItemRecord.album_id == album_id)):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Album has no images")
+        await request.app.state.album_scheduler.run_album(album_id)
+        with sessions() as session:
+            album = session.get(AlbumRecord, album_id)
+            if album is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found")
+            if not album.is_running:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Album has no available images")
+            return album_response(session, album)
+
+    @app.post("/api/v1/albums/{album_id}/stop", response_model=AlbumResponse)
+    async def stop_album(album_id: str, request: Request) -> AlbumResponse:
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            if session.get(AlbumRecord, album_id) is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found")
+        await request.app.state.album_scheduler.stop_album(album_id)
+        with sessions() as session:
+            album = session.get(AlbumRecord, album_id)
+            if album is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found")
+            return album_response(session, album)
+
+    @app.delete("/api/v1/albums/{album_id}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_album(album_id: str, request: Request) -> Response:
+        sessions: sessionmaker[Session] = request.app.state.sessions
+        with sessions() as session:
+            album = session.get(AlbumRecord, album_id)
+            if album is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found")
+            if album.is_running:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stop the album before deleting it")
+            for item in session.scalars(select(AlbumItemRecord).where(AlbumItemRecord.album_id == album.id)):
+                session.delete(item)
+            record_activity(
+                session,
+                "album.deleted",
+                f"Deleted album '{album.name}'",
+                display_id=album.display_id,
+                album_id=album.id,
+            )
+            session.delete(album)
+            session.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/api/v1/displays/{display_id}/display-now", response_model=JobResponse)
     async def display_now(display_id: str, body: DisplayNowRequest, request: Request) -> JobResponse:
@@ -260,8 +639,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             asset = session.get(AssetRecord, str(body.asset_id))
             if display is None or asset is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Display or asset not found")
+            if asset.deleted_at is not None:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Asset is in the trash")
             render_settings = body.render_settings or RenderSettings.model_validate(display.default_render_settings)
             job = create_display_now_job(session, display, asset, render_settings)
+            record_activity(
+                session,
+                "display-now.queued",
+                f"Queued '{asset.original_filename}' for immediate display",
+                display_id=display.id,
+                asset_id=asset.id,
+                job_id=job.id,
+            )
+            session.commit()
             response = _job_response(session, job)
         await request.app.state.worker.enqueue(job.id)
         logger.info("display-now queued", extra={"job_id": job.id, "asset_id": asset.id})
@@ -379,6 +769,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 job.error_code = body.error_code or "agent-failed"
                 job.error_message = body.error_message or "The agent reported a display failure"
                 display.last_error = job.error_message
+            record_activity(
+                session,
+                f"job.{event.value}",
+                f"Display job {job.id} reported {event.value}",
+                display_id=display_id,
+                asset_id=job.asset_id,
+                job_id=job.id,
+            )
             session.commit()
         return {"ok": True}
 

@@ -7,9 +7,9 @@ hardware refreshes.
 
 ## Current status
 
-Phase 0 is in place: project tooling, a Docker development environment, safe
-configuration templates, and the shared v1 contract. The application and agent
-are not implemented yet.
+The host prototype is implemented through Phase 1.5: upload and deterministic
+seven-colour rendering, display-now, gallery, albums, activity history, and a
+browser UI. The Pi agent remains the next phase.
 
 ## Project layout
 
@@ -63,16 +63,15 @@ docker compose -f deploy/docker/compose.yaml up -d --build host
 
 Open `http://<host>:8000` for the dashboard and `http://<host>:8000/health` for
 the health check. The host stores SQLite state, uploads, previews, and artifacts in
-the named `inky-host-data` volume. For development, copy `.env.example` to `.env`
-and replace the agent token before connecting a Pi.
+the named `inky-host-data` volume. The Pi will poll this host; it needs the host's
+LAN address and published port, while the host does not need a Pi IP or port.
 
 ## Fixed display configuration
 
-The server is configured for a fixed display profile in
-`apps/host/src/inky_host/display_profile.py`. It defines the 800 × 480,
-seven-colour target and its default physical orientation. The Pi does not discover
-or report display model/capabilities to the server. Runtime orientation changes
-will be persisted by the host in a later phase.
+The server is configured for a fixed display profile in its host settings. It
+defines the 800 × 480, seven-colour target and its default physical orientation.
+The Pi does not discover or report display model/capabilities to the server.
+Physical orientation and rotation are persisted through the Settings page.
 
 ## Contract
 

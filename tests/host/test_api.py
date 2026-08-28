@@ -10,9 +10,9 @@ from inky_host.config import Settings
 from inky_host.main import create_app
 
 
-def png_upload() -> bytes:
+def png_upload(color: tuple[int, int, int] = (30, 110, 200)) -> bytes:
     output = BytesIO()
-    Image.new("RGB", (1000, 700), (30, 110, 200)).save(output, format="PNG")
+    Image.new("RGB", (1000, 700), color).save(output, format="PNG")
     return output.getvalue()
 
 
@@ -88,6 +88,48 @@ def test_upload_rejects_unsupported_content_type(tmp_path: Path) -> None:
     assert response.status_code == 415
 
 
+def test_connection_settings_describe_pi_pull_and_allow_trusted_lan_access(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", environment="test")
+    with TestClient(create_app(settings)) as client:
+        current = client.get("/api/v1/settings/connection")
+        assert current.status_code == 200
+        assert current.json()["agent_auth_required"] is False
+
+        updated = client.patch(
+            "/api/v1/settings/connection",
+            json={
+                "advertised_host": "http://192.168.0.10",
+                "advertised_port": 8080,
+                "agent_poll_interval_seconds": 20,
+                "agent_heartbeat_interval_seconds": 60,
+                "agent_auth_required": False,
+            },
+        )
+        assert updated.status_code == 200
+        assert updated.json()["server_url"] == "http://192.168.0.10:8080"
+        assert client.get("/api/v1/displays/inky-main/desired").status_code == 204
+
+        secured = client.patch(
+            "/api/v1/settings/connection",
+            json={
+                "advertised_host": "http://192.168.0.10",
+                "advertised_port": 8080,
+                "agent_poll_interval_seconds": 20,
+                "agent_heartbeat_interval_seconds": 60,
+                "agent_auth_required": True,
+            },
+        )
+        assert secured.status_code == 200
+        assert client.get("/api/v1/displays/inky-main/desired").status_code == 401
+        assert (
+            client.get(
+                "/api/v1/displays/inky-main/desired",
+                headers={"Authorization": "Bearer development-agent-token-change-me"},
+            ).status_code
+            == 204
+        )
+
+
 def test_portrait_setting_changes_the_browser_preview_orientation(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path / "data", environment="test")
     with TestClient(create_app(settings)) as client:
@@ -116,3 +158,46 @@ def test_portrait_setting_changes_the_browser_preview_orientation(tmp_path: Path
 
         preview = Image.open(BytesIO(client.get(job["preview_url"]).content))
         assert preview.size == (480, 800)
+
+
+def test_gallery_album_lifecycle_and_safe_soft_delete(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path / "data", environment="test")
+    with TestClient(create_app(settings)) as client:
+        first = client.post(
+            "/api/v1/assets",
+            files={"file": ("first.png", png_upload((200, 40, 30)), "image/png")},
+        ).json()
+        second = client.post(
+            "/api/v1/assets",
+            files={"file": ("second.png", png_upload((30, 180, 60)), "image/png")},
+        ).json()
+        album = client.post(
+            "/api/v1/albums",
+            json={
+                "name": "Weekend colours",
+                "asset_ids": [first["id"], second["id"]],
+                "interval_seconds": 60,
+            },
+        )
+        assert album.status_code == 201
+        album_id = album.json()["id"]
+        assert [item["asset_id"] for item in album.json()["items"]] == [first["id"], second["id"]]
+
+        running = client.post(f"/api/v1/albums/{album_id}/run")
+        assert running.status_code == 200
+        assert running.json()["is_running"] is True
+
+        blocked = client.delete(f"/api/v1/assets/{first['id']}")
+        assert blocked.status_code == 409
+        assert "running album" in str(blocked.json())
+
+        assert client.post(f"/api/v1/albums/{album_id}/stop").status_code == 200
+        deleted = client.post("/api/v1/assets/bulk-delete", json={"asset_ids": [second["id"]]})
+        assert deleted.status_code == 200
+        assert deleted.json()["deleted_ids"] == [second["id"]]
+        assert [asset["id"] for asset in client.get("/api/v1/assets").json()] == [first["id"]]
+
+        restored = client.post(f"/api/v1/assets/{second['id']}/restore")
+        assert restored.status_code == 200
+        assert len(client.get("/api/v1/assets").json()) == 2
+        assert any(event["event_type"] == "album.started" for event in client.get("/api/v1/activity").json())

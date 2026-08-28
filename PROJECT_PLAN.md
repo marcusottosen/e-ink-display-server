@@ -18,7 +18,7 @@ Important decisions to preserve during implementation:
 - Use atomic writes on both server and Pi storage.
 - Verify the E673 GPIO mapping and refresh timing on real hardware before calling the integration complete.
 
-Open implementation risks are hardware/library compatibility on the Pi Zero W, the exact seven-colour Inky palette and dithering behaviour, refresh duration, HTTPS certificate provisioning on a home LAN, and recovery semantics after power loss during `show()`.
+Open implementation risks are hardware/library compatibility on the Pi Zero W, the exact seven-colour Inky palette and dithering behaviour, refresh duration, and recovery semantics after power loss during `show()`. The initial trusted-LAN installation intentionally uses simple Pi-pull HTTP; security hardening is deferred.
 
 ## Target folder structure
 
@@ -79,24 +79,28 @@ Open implementation risks are hardware/library compatibility on the Pi Zero W, t
 
 ### Phase 1.5 — Gallery and albums
 
-- [ ] Build the gallery with stored-image metadata, faithful previews, `display
+- [x] Build the gallery with stored-image metadata, faithful previews, `display
   now`, single deletion, multi-select, bulk deletion, confirmation, and an undo or
   soft-delete period.
-- [ ] Protect active/current album and display content from ambiguous deletion;
+- [x] Protect active/current album and display content from ambiguous deletion;
   retain sufficient audit history to explain the result.
-- [ ] Build album creation and editing: name, ordered images, reorder, add/remove
+- [x] Build album creation and editing: name, ordered images, reorder, add/remove
   gallery items, target display, and orientation-aware item previews.
-- [ ] Add album run/stop control, sequential/shuffle mode, per-item interval,
+- [x] Add album run/stop control, sequential/shuffle mode, per-item interval,
   default framing settings, enabled state, time zone, and optional schedule.
-- [ ] Add display status and recent activity views: heartbeat, current/desired
+- [x] Add display status and recent activity views: heartbeat, current/desired
   content, latest refresh result, errors, and safe retry.
+- [x] Add a Settings page for persisted panel configuration and the Pi-to-host
+  connection profile (host LAN URL, published API port, polling, and heartbeat).
 
 ### Phase 2 — Pi agent vertical slice
 
 - [ ] Scaffold the single-service Python agent and configuration loading without logging the device token.
 - [ ] Configure the agent for its fixed display target; do not implement display
   discovery or capability registration.
-- [ ] Implement polling, heartbeat, HTTPS certificate validation, timeout handling, and exponential backoff.
+- [ ] Implement simple trusted-LAN HTTP polling, heartbeat, timeout handling, and
+  exponential backoff. Keep bearer-token support optional; HTTPS and stronger
+  security are deferred.
 - [ ] Implement checksum/dimension validation and crash-safe atomic artifact replacement in `/var/lib/inky-agent/`.
 - [ ] Implement a single serialized hardware worker guarded by a lock.
 - [ ] Implement `started`, `completed`, and `failed` reporting, including uncertain completion handling.

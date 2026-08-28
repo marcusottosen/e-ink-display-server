@@ -12,15 +12,16 @@ fixed display profile.
 - Renaming, removing, or changing the meaning of a field requires a new API version.
 - JSON uses `snake_case`, UTC ISO 8601 timestamps, UUID identifiers, and lowercase
   64-character SHA-256 hex digests.
-- The agent authenticates as its pre-configured display using a bearer token. Tokens
-  are never part of a request body or response and must never be logged.
+- The agent uses a pre-configured display route. On the trusted-LAN prototype,
+  bearer-token authentication is optional and disabled by default; when enabled,
+  the token is never part of a request body or response and must never be logged.
 
 ## Fixed display profile
 
 The server configures each display's ID, 800 × 480 panel resolution, seven-colour
 palette, physical orientation, rotation, default render settings, and time zone.
-The Pi's requests identify only its already-known display route and authenticate
-with its device token.
+The Pi's requests identify only its already-known display route. If host-side
+agent authentication is enabled, they also carry its device token.
 
 **Display orientation** describes the installed panel direction. **Content framing**
 describes how an image is treated (crop, fit, content rotation, focal point, flips).

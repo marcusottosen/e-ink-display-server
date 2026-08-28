@@ -6,6 +6,24 @@ The Docker host is the brains of the system. It provides the web interface, stor
 
 The host should be the only side that performs expensive or extensible computation.
 
+## Pi connection model
+
+Use a **Pi-pull** connection: the Pi makes outbound HTTP requests to this host to
+poll its desired revision, download an artifact, send a heartbeat, and acknowledge
+the result. The host never opens a connection to the Pi.
+
+This is the right model for the first appliance because it survives a Pi reboot,
+Wi-Fi reconnect, changing Pi IP address, and ordinary home-network NAT without
+discovery or inbound firewall rules. The only address to configure is the Docker
+host's LAN URL and its published API port (normally `http://<host-lan-ip>:8000`).
+The Pi needs no IP address or listening port in the host UI.
+
+For the trusted-LAN prototype, plain HTTP and no agent authentication are
+acceptable and are the defaults. Set `INKY_AGENT_AUTH_REQUIRED=true` and a unique
+device token when the network is no longer fully trusted. HTTPS, stronger
+authentication, and user accounts are explicitly deferred rather than being
+half-implemented now.
+
 ## Recommended modern technology stack
 
 ### Backend
@@ -147,7 +165,7 @@ For a first single-display prototype, `web`, an in-process worker, SQLite, and l
 - Image upload and validation
 - Original image storage
 - Image rendering and preview generation
-- Fixed display configuration and agent authentication
+- Fixed display configuration and optional agent authentication
 - Desired display revision management
 - Playlists, loops, and schedules
 - Job leases and retry handling
@@ -202,6 +220,8 @@ The first artifact format should be an 800 x 480 paletted PNG. A later optimized
 - File size
 - Created timestamp
 - Soft-deleted timestamp, when applicable
+- Active-use deletion blockers for running albums, desired content, current content,
+  and queued display work
 
 ### Rendered artifacts
 
@@ -235,6 +255,13 @@ The first artifact format should be an 800 x 480 paletted PNG. A later optimized
 - Time zone
 - Enabled/disabled state
 - Start/end dates
+- Next item index and next scheduled run timestamp for an active album
+
+### Activity history
+
+- Event type and human-readable message
+- Related display, asset, album, and job identifiers where applicable
+- Timestamp
 
 ## API requirements
 
@@ -245,13 +272,18 @@ POST /api/v1/assets
 GET  /api/v1/assets
 DELETE /api/v1/assets/{asset_id}
 POST /api/v1/assets/bulk-delete
+POST /api/v1/assets/{asset_id}/restore
 POST /api/v1/renders
 GET  /api/v1/assets/{asset_id}/preview
 POST /api/v1/albums
 GET  /api/v1/albums
+GET  /api/v1/albums/{album_id}
 PATCH /api/v1/albums/{album_id}
+PUT  /api/v1/albums/{album_id}/items
 POST /api/v1/albums/{album_id}/run
 POST /api/v1/albums/{album_id}/stop
+DELETE /api/v1/albums/{album_id}
+GET  /api/v1/activity
 POST /api/v1/displays
 GET  /api/v1/displays
 GET  /api/v1/displays/{display_id}
@@ -278,6 +310,20 @@ The desired-state response should include:
 - Optional not-before and expiry timestamps
 
 Artifact downloads must be binary responses, not base64 embedded in JSON.
+
+## Gallery and album behaviour
+
+Gallery deletion is a soft delete: original bytes and audit history remain available
+for a later restore. The host rejects a single-image deletion when the asset is the
+current or desired display content, is in a running album, or belongs to a queued,
+rendering, ready, or active display job. A bulk-delete response reports protected
+items while moving all safe selections to Trash.
+
+An album has ordered gallery items, a display target, default render settings,
+sequential or shuffle selection, a minimum 60-second interval, enabled state, time
+zone, and optional start/end window. The prototype uses one serialized in-process
+scheduler; it queues at most one new album item per interval and sends it through
+the normal desired-state/render worker.
 
 ## Queue and reliability rules
 

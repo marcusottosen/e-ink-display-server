@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, Engine, ForeignKey, Integer, String, Text, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .config import Settings
@@ -37,6 +38,20 @@ class DisplayRecord(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class ConnectionSettingsRecord(Base):
+    """Singleton configuration for how the fixed Pi reaches this host."""
+
+    __tablename__ = "connection_settings"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    advertised_host: Mapped[str] = mapped_column(String(255))
+    advertised_port: Mapped[int] = mapped_column(Integer)
+    agent_poll_interval_seconds: Mapped[int] = mapped_column(Integer, default=30)
+    agent_heartbeat_interval_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    agent_auth_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
 class AssetRecord(Base):
     __tablename__ = "assets"
 
@@ -49,6 +64,7 @@ class AssetRecord(Base):
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 
 class ArtifactRecord(Base):
@@ -85,9 +101,90 @@ class DisplayJobRecord(Base):
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class AlbumRecord(Base):
+    __tablename__ = "albums"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    display_id: Mapped[str] = mapped_column(ForeignKey("displays.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    order_mode: Mapped[str] = mapped_column(String(16), default="sequential")
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=120)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_running: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    time_zone: Mapped[str] = mapped_column(String(64))
+    schedule_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    schedule_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    default_render_settings: Mapped[dict[str, object]] = mapped_column(JSON)
+    next_item_index: Mapped[int] = mapped_column(Integer, default=0)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class AlbumItemRecord(Base):
+    __tablename__ = "album_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    album_id: Mapped[str] = mapped_column(ForeignKey("albums.id"), index=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ActivityRecord(Base):
+    __tablename__ = "activity"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    message: Mapped[str] = mapped_column(Text)
+    display_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    asset_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    album_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    job_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+def record_activity(
+    session: Session,
+    event_type: str,
+    message: str,
+    *,
+    display_id: str | None = None,
+    asset_id: str | None = None,
+    album_id: str | None = None,
+    job_id: str | None = None,
+) -> ActivityRecord:
+    record = ActivityRecord(
+        id=str(uuid4()),
+        event_type=event_type,
+        message=message,
+        display_id=display_id,
+        asset_id=asset_id,
+        album_id=album_id,
+        job_id=job_id,
+    )
+    session.add(record)
+    return record
+
+
+def _apply_sqlite_migrations(engine: Engine) -> None:
+    """Apply additive migrations needed by the first prototype releases.
+
+    Alembic takes over once PostgreSQL and multi-service deployment are introduced.
+    """
+
+    if engine.dialect.name != "sqlite":
+        return
+    with engine.begin() as connection:
+        columns = {row[1] for row in connection.execute(text("PRAGMA table_info(assets)"))}
+        if "deleted_at" not in columns:
+            connection.execute(text("ALTER TABLE assets ADD COLUMN deleted_at DATETIME"))
+
+
 def create_session_factory(settings: Settings) -> sessionmaker[Session]:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     connect_args = {"check_same_thread": False} if settings.resolved_database_url.startswith("sqlite") else {}
     engine = create_engine(settings.resolved_database_url, connect_args=connect_args)
     Base.metadata.create_all(engine)
+    _apply_sqlite_migrations(engine)
     return sessionmaker(engine, expire_on_commit=False)
