@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageOps
+from PIL.PngImagePlugin import PngInfo
 
 from inky_contract import DisplayProfile, RenderSettings
 
@@ -26,10 +27,14 @@ class RenderedArtifact:
 
 
 def artifact_cache_key(source_sha256: str, profile: DisplayProfile, settings: RenderSettings) -> str:
+    render_settings = settings.model_dump(mode="json")
+    # The host no longer dithers, so this legacy setting must not create a
+    # duplicate cache entry for identical PNG bytes.
+    render_settings.pop("dither_mode", None)
     payload = {
         "source_sha256": source_sha256,
         "profile": profile.model_dump(mode="json"),
-        "settings": settings.model_dump(mode="json"),
+        "settings": render_settings,
         "renderer_version": RENDERER_VERSION,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -45,6 +50,7 @@ def render_image(
     palette mapping happens only when the Pi performs the hardware refresh.
     """
 
+    cache_key = artifact_cache_key(source_sha256, profile, settings)
     with Image.open(source_path) as original:
         image = ImageOps.exif_transpose(original).convert("RGB")
         image = _rotate_content(image, int(settings.content_rotation))
@@ -53,18 +59,18 @@ def render_image(
             image = ImageOps.mirror(image)
         if settings.flip_vertical:
             image = ImageOps.flip(image)
-        preview_content = _encode_png(image)
+        preview_content = _encode_png(image, cache_key)
         image = _rotate_to_hardware(image, int(profile.rotation))
 
     if image.size != (profile.width, profile.height):
         raise ValueError("rendered artifact does not match the fixed display dimensions")
 
-    content = _encode_png(image)
+    content = _encode_png(image, cache_key)
     return RenderedArtifact(
         content=content,
         preview_content=preview_content,
         sha256=hashlib.sha256(content).hexdigest(),
-        cache_key=artifact_cache_key(source_sha256, profile, settings),
+        cache_key=cache_key,
         width=image.width,
         height=image.height,
     )
@@ -81,9 +87,11 @@ def validate_source_image(source_path: Path, max_pixels: int) -> tuple[int, int]
     return width, height
 
 
-def _encode_png(image: Image.Image) -> bytes:
+def _encode_png(image: Image.Image, cache_key: str) -> bytes:
     output = io.BytesIO()
-    image.save(output, format="PNG", optimize=False)
+    metadata = PngInfo()
+    metadata.add_text("inky-cache-key", cache_key)
+    image.save(output, format="PNG", optimize=False, pnginfo=metadata)
     return output.getvalue()
 
 

@@ -1,49 +1,38 @@
-# Inky contract v1
+# Host and Pi messages
 
-This package is the source of truth for messages exchanged between the Docker host
-and the fixed Raspberry Pi agent. It intentionally contains no endpoint for display
-discovery, model registration, or capability negotiation: the host already owns the
-fixed display profile.
+This package contains the Pydantic models used by the Docker host and the one
+Raspberry Pi. The panel model, resolution, orientation, and display ID are fixed
+in host configuration. The Pi does not discover or register a display.
 
-## Compatibility rules
+The host API lives under `/api/v1`. It uses `snake_case` JSON, UTC ISO 8601
+timestamps, UUIDs, and lowercase 64-character SHA-256 values.
 
-- The API prefix is `/api/v1` and `api_version` is `v1`.
-- Additive optional fields are allowed in a later compatible version.
-- Renaming, removing, or changing the meaning of a field requires a new API version.
-- JSON uses `snake_case`, UTC ISO 8601 timestamps, UUID identifiers, and lowercase
-  64-character SHA-256 hex digests.
-- The agent uses a pre-configured display route. On the trusted-LAN prototype,
-  bearer-token authentication is optional and disabled by default; when enabled,
-  the token is never part of a request body or response and must never be logged.
+## Pi requests
 
-## Fixed display profile
-
-The server configures each display's ID, 800 × 480 panel resolution, seven-colour
-palette, physical orientation, rotation, default render settings, and time zone.
-The Pi's requests identify only its already-known display route. If host-side
-agent authentication is enabled, they also carry its device token.
-
-**Display orientation** describes the installed panel direction. **Content framing**
-describes how an image is treated (crop, fit, content rotation, focal point, flips).
-A host preview and the delivered artifact must apply both sets of settings in the
-same order.
-
-## Agent endpoints
-
-| Method | Route | Purpose |
+| Method | Route | What it does |
 | --- | --- | --- |
-| `GET` | `/api/v1/displays/{display_id}/desired` | Retrieve the latest desired revision, or no-content when already current. |
-| `GET` | `/api/v1/artifacts/{sha256}` | Download an immutable binary artifact. |
-| `POST` | `/api/v1/displays/{display_id}/heartbeat` | Send liveness and current-revision state. |
-| `POST` | `/api/v1/displays/{display_id}/jobs/{job_id}/started` | Acknowledge display work has begun. |
-| `POST` | `/api/v1/displays/{display_id}/jobs/{job_id}/completed` | Confirm `show()` returned for the revision. |
-| `POST` | `/api/v1/displays/{display_id}/jobs/{job_id}/failed` | Report a verified failure. |
+| `GET` | `/api/v1/displays/{display_id}/desired` | Gets the newest requested image, if one is needed. |
+| `GET` | `/api/v1/artifacts/{sha256}` | Downloads the PNG for that request. |
+| `POST` | `/api/v1/displays/{display_id}/heartbeat` | Reports that the Pi is still checking in. |
+| `POST` | `/api/v1/displays/{display_id}/jobs/{job_id}/started` | Says the Pi has started the refresh. |
+| `POST` | `/api/v1/displays/{display_id}/jobs/{job_id}/completed` | Says the panel refresh call returned. |
+| `POST` | `/api/v1/displays/{display_id}/jobs/{job_id}/failed` | Reports an error. |
 
-The desired-state endpoint delivers only the most recent valid revision. Delivery is
-at-least-once: receiving a previously displayed revision must be safe, and a lost
-completion acknowledgement must not discard the artifact.
+The Pi asks for only the newest requested image. If a completion report is lost,
+the Pi may receive the same image again; showing it again is fine.
 
-## Desired-state response
+## Image details
+
+The panel is fixed at 800 × 480. The host changes framing, rotation, and size,
+but does not alter colours, apply dithering, enhance images, or choose crops.
+The generated PNG remains RGB; the Inky driver handles the physical panel's own
+colour mapping during refresh.
+
+`display_orientation` means how the panel is installed. `content_rotation` and
+`fit_mode` are choices for an individual image. The browser helper and generated
+PNG use the same framing and orientation values.
+
+## Desired image example
 
 ```json
 {
@@ -54,39 +43,26 @@ completion acknowledgement must not discard the artifact.
   "artifact": {
     "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     "url": "/api/v1/artifacts/ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-  "format": "rgb-png",
+    "format": "rgb-png",
     "media_type": "image/png",
     "width": 800,
     "height": 480,
     "palette": ["black", "white", "red", "yellow", "blue", "green", "orange"],
     "renderer_version": "1.0.0"
-  },
-  "not_before": null,
-  "expires_at": null
+  }
 }
 ```
 
-## Artifact requirements
+## Host request
 
-- The initial format is a full-colour RGB PNG with `Content-Type: image/png`.
-- Its dimensions must match the configured fixed display profile.
-- The agent downloads bytes, verifies SHA-256 against `artifact.sha256`, decodes the
-  RGB image, validates dimensions, then writes it atomically into its local spool.
-- Artifact URLs return binary bytes; image data is never embedded as base64 in JSON.
-- The renderer version, display profile, and render settings are part of the server
-  artifact cache identity. The retained `dither_mode` field is ignored while the
-  host preserves source colours.
-
-## Host UI request
-
-`POST /api/v1/displays/{display_id}/display-now` accepts `DisplayNowRequest`:
+`POST /api/v1/displays/{display_id}/display-now` accepts an existing gallery
+image ID and optional framing settings:
 
 ```json
 {
   "asset_id": "9a595797-c181-4f53-8927-2a6fe776c65b",
   "render_settings": {
     "fit_mode": "crop",
-    "dither_mode": "floyd-steinberg",
     "content_rotation": 0,
     "focal_point_x": 0.5,
     "focal_point_y": 0.5,
@@ -95,6 +71,3 @@ completion acknowledgement must not discard the artifact.
   }
 }
 ```
-
-Omitting `render_settings` uses the fixed profile defaults. The host renders first,
-then atomically sets the produced artifact as the latest desired revision.

@@ -1,95 +1,61 @@
-# Inky Display System
+# Inky home display tool
 
-A self-hosted controller for a fixed Pimoroni Inky display. The Docker host stores
-images, renders immutable display artifacts, provides the web UI, and owns desired
-display state. The Raspberry Pi agent only polls the host and performs serialized
-hardware refreshes.
+A small web tool for choosing images and sending them to one fixed Pimoroni Inky
+display at home.
 
-## Current status
+The Docker host provides the web pages, stores images, prepares the 800 × 480
+PNG used by the panel, and keeps the latest requested image. The Raspberry Pi
+asks the host for work and refreshes the display. The host does not connect to
+the Pi.
 
-The host and Pi-agent prototypes are implemented through Phase 2: full-colour
-final-resolution resizing, display-now, gallery, albums, activity history, and a
-fixed outbound Pi agent with durable local state.
-
-## Project layout
-
-- `apps/host/` — future FastAPI host and frontend.
-- `apps/pi-agent/` — fixed Raspberry Pi polling service and durable local spool.
-- `packages/contract/` — shared Pydantic models and API/artifact contract.
-- `deploy/docker/` — Docker-based development tooling.
-- `deploy/systemd/` — future Pi service installation files.
-- `tests/` — contract, host, and agent tests.
-
-## Requirements
-
-- Docker Engine with Docker Compose v2 or later.
-- Python is optional on the host machine; Docker provides the supported toolchain.
-
-Supported runtimes are Python 3.12–3.13 for the Docker host and Python 3.11–3.13
-for the Pi agent. The Pi should use the Python version supplied by its supported
-Raspberry Pi OS release.
-
-## Start development with Docker
-
-Create a local configuration file, then install the workspace dependencies inside
-the Docker tooling container:
+## Run it
 
 ```bash
 cp .env.example .env
-docker compose -f deploy/docker/compose.yaml run --rm tools sync --all-packages --group dev
-docker compose -f deploy/docker/compose.yaml run --rm tools run --package inky-host pytest tests/contract tests/host
-```
-
-The dependency resolver writes `uv.lock` at the repository root. Commit that file
-whenever dependencies are changed; subsequent commands should use `--locked`.
-
-Validate the Compose configuration without starting any service:
-
-```bash
-docker compose -f deploy/docker/compose.yaml --env-file .env config
-```
-
-The development container mounts the repository and keeps its virtual environment
-in the named `inky-python-venv` volume, so Python dependencies do not pollute the
-LXC.
-
-## Run the host
-
-Start the single-display host with a persistent Docker volume:
-
-```bash
 docker compose -f deploy/docker/compose.yaml up -d --build host
 ```
 
-Open `http://<host>:8000` for the dashboard and `http://<host>:8000/health` for
-the health check. The host stores SQLite state, uploads, previews, and artifacts in
-the named `inky-host-data` volume. The Pi will poll this host; it needs the host's
-LAN address and published port, while the host does not need a Pi IP or port.
+Open `http://<host-lan-ip>:8000`.
 
-## Fixed display configuration
+Set the host LAN address and port in the Settings page before configuring the
+Pi. The Pi only needs that host address; no Pi IP address or open Pi port is
+needed in this tool.
 
-The server is configured for a fixed display profile in its host settings. It
-defines the 800 × 480, seven-colour target and its default physical orientation.
-The Pi does not discover or report display model/capabilities to the server.
-Physical orientation and rotation are persisted through the Settings page.
+## Storage
 
-## Pi agent
+SQLite, original images, and generated display files are stored in Docker's
+named `inky-host-data` volume. Container and LXC restarts do not remove it.
+It is removed only if the Docker volume is explicitly removed or an LXC snapshot
+is rolled back.
 
-The Pi only needs the Docker host's LAN URL and port; it makes all outbound
-requests and the host never connects to the Pi. Install the service from a copy of
-this repository using the instructions in
-[`apps/pi-agent/README.md`](apps/pi-agent/README.md). The host produces an RGB
-PNG at the final panel resolution and preserves source colours; the physical Inky
-driver performs its unavoidable limited-colour mapping only at refresh time.
+Deleting an image in the gallery permanently deletes that image and its generated
+files. There is no Trash.
 
-## Contract
+## What it does
 
-The v1 API and artifact rules are documented in
-[`packages/contract/README.md`](packages/contract/README.md). Shared validation
-models live alongside it and are the only place where cross-service payloads should
-be defined.
+- Upload an image, frame it, rotate it, and either save it or send it to the display.
+- Keep a gallery of saved images, with per-image framing and rotation settings.
+- Create albums and run them in order or shuffled, using a chosen interval.
+- Play selected gallery images once as a temporary album without saving one.
+- Sending one image to the display stops any running album.
+- Show the image last confirmed by the Pi separately from the newest image the Pi can request.
+- Let the Pi keep its last downloaded display file when the host is unavailable.
+
+The host only rotates, frames, and resizes images. Colours are left alone.
+
+## Layout
+
+- `apps/host/` — FastAPI host and web UI.
+- `apps/pi-agent/` — Pi service that polls the host and refreshes the panel.
+- `packages/contract/` — shared host/Pi request models.
+- `deploy/docker/` — Docker configuration for the host.
+- `deploy/systemd/` — Pi service installation files.
+
+## Pi setup
+
+Copy this repository to the Pi and follow
+[the Pi agent notes](apps/pi-agent/README.md).
 
 ## License
 
-This repository is currently source-available for its owner only. All rights are
-reserved until an explicit open-source license is chosen.
+Private home-use repository. All rights reserved.

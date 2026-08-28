@@ -1,11 +1,11 @@
 [project]
 name = "inky-display-workspace"
 version = "0.1.0"
-description = "Docker-hosted controller and Raspberry Pi agent for an Inky display"
+description = "Home-use Docker host and Raspberry Pi agent for one Inky display"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = { text = "All rights reserved" }
-authors = [{ name = "Inky Display System maintainers" }]
+authors = [{ name = "Inky home display" }]
 
 [tool.uv.workspace]
 members = ["apps/host", "apps/pi-agent", "packages/contract"]

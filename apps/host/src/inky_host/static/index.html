@@ -7,82 +7,112 @@
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
-    <main>
+    <main class="app-shell">
       <header class="app-header">
-        <div><p class="eyebrow">INKY DISPLAY</p><h1>Make the wall change.</h1></div>
-        <span id="connection-status" class="status neutral">Checking display…</span>
+        <p class="app-mark">INKY</p>
       </header>
+
       <nav class="tabs" aria-label="Main navigation">
-        <button class="tab active" data-view="dashboard">Dashboard</button>
-        <button class="tab" data-view="gallery">Gallery</button>
-        <button class="tab" data-view="albums">Albums</button>
-        <button class="tab" data-view="activity">Activity</button>
-        <button class="tab" data-view="settings">Settings</button>
+        <button class="tab active" data-view="dashboard" type="button">Dashboard</button>
+        <button class="tab" data-view="gallery" type="button">Gallery</button>
+        <button class="tab" data-view="albums" type="button">Albums</button>
+        <button class="tab" data-view="activity" type="button">Activity</button>
+        <button class="tab" data-view="settings" type="button">Settings</button>
       </nav>
 
       <section id="dashboard-view" class="view active">
-        <div class="grid dashboard-grid">
-          <article class="card">
-            <p class="eyebrow">DASHBOARD</p><h2>Upload and display</h2>
-            <form id="upload-form">
-              <label class="file-picker" for="image-file"><input id="image-file" name="file" type="file" accept="image/jpeg,image/png,image/webp" required><span id="file-label">Choose a JPEG, PNG, or WebP</span></label>
-              <label>Framing<select id="fit-mode"><option value="crop">Crop to fill</option><option value="contain">Fit with white border</option><option value="stretch">Stretch</option></select></label>
-              <button id="submit-button" type="submit">Upload and display</button>
-            </form>
+        <div class="dashboard-layout">
+          <aside class="card render-controls">
+            <div><p class="eyebrow">UPLOAD IMAGE</p><h2>Choose and frame an image</h2></div>
+            <label class="file-picker" for="image-file"><input id="image-file" name="file" type="file" accept="image/jpeg,image/png,image/webp"><span class="file-picker-action">Choose image</span><span id="file-label">JPEG, PNG, or WebP</span></label>
+            <div class="control-group"><label for="fit-mode">Framing</label><select id="fit-mode"><option value="crop">Crop to fill</option><option value="contain">Fit with white border</option><option value="stretch">Stretch to fit</option></select><p class="help-text">Nothing is uploaded until you press one of the buttons below.</p></div>
+            <div class="control-group"><label for="content-rotation">Image rotation</label><select id="content-rotation"><option value="0">No rotation</option><option value="90">90° clockwise</option><option value="180">180°</option><option value="270">90° counter-clockwise</option></select></div>
+            <div class="button-stack"><button id="upload-button" class="secondary" type="button" disabled>Save to gallery</button><button id="display-button" type="button" disabled>Upload and display now</button></div>
             <p id="job-message" class="message" aria-live="polite">Choose an image to begin.</p>
-          </article>
-          <article class="card">
-            <p class="eyebrow">DISPLAY STATUS</p><h2>Fixed panel</h2>
-            <p class="subtitle">Use Settings to change the panel orientation or see how the Pi connects.</p>
-            <dl id="display-details" class="details"></dl>
+          </aside>
+          <article id="preview-workspace" class="card preview-workspace" hidden>
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">FRAMING PREVIEW</p>
+                <h2>How the image fits on the panel</h2>
+              </div>
+              <span id="preview-meta" class="pill">Loading display…</span>
+            </div>
+            <div id="preview-frame" class="preview-frame landscape">
+              <canvas id="local-preview" hidden aria-label="Image framing preview"></canvas>
+              <div id="preview-placeholder" class="preview-placeholder">
+                <span class="placeholder-icon">▧</span>
+                <strong>Choose an image to begin</strong>
+                <p>Choose an image to see how it fits.</p>
+              </div>
+            </div>
+            <p class="preview-note">The frame follows the physical panel orientation. Colours are unchanged; the host only frames, rotates, and resizes.</p>
           </article>
         </div>
-        <article class="card preview-card"><div class="section-heading"><div><p class="eyebrow">FINAL-RESOLUTION PREVIEW</p><h2>Resized output</h2></div><span id="preview-meta" class="muted">800 × 480</span></div><div id="preview-frame" class="preview-frame landscape"><img id="preview" alt="Resized display image preview" hidden><p id="preview-placeholder">The final resized image appears here with its original colours preserved.</p></div></article>
+        <article class="card display-status-card"><div class="section-heading"><div><p class="eyebrow">DISPLAY</p><h2>Display state</h2></div><div class="actions"><button id="stop-playback" class="secondary" type="button" disabled>Stop playback</button><button class="text-button" data-view="settings" type="button">Panel settings →</button></div></div><div class="display-state-grid"><section><p class="eyebrow">ON THE PANEL</p><p class="status-note">Last image confirmed by the Pi.</p><div id="current-display" class="current-display"></div></section><section><p class="eyebrow">EXPOSED IMAGE</p><p class="status-note">Latest image available to the Pi.</p><div id="requested-display" class="current-display"></div></section></div><dl id="display-details" class="details"></dl></article>
       </section>
 
       <section id="gallery-view" class="view" hidden>
-        <div class="section-heading"><div><p class="eyebrow">GALLERY</p><h2>Your stored images</h2><p class="subtitle">Images are recoverable from Trash. Deletion is always available.</p></div><div class="actions"><button id="show-trash" class="secondary" type="button">Show trash</button><button id="delete-selected" class="danger" type="button">Move selected to Trash</button></div></div>
+        <div class="section-heading page-heading"><div><p class="eyebrow">GALLERY</p><h2>Your image library</h2><p class="subtitle">Select images to play them once as a temporary album, or delete them permanently.</p></div><div class="actions"><button id="play-selected" type="button">Play selected</button><button id="delete-selected" class="danger" type="button">Delete selected</button></div></div>
         <p id="gallery-message" class="message" aria-live="polite"></p><div id="gallery-grid" class="gallery-grid"></div>
       </section>
 
       <section id="albums-view" class="view" hidden>
-        <div class="grid album-grid">
-          <article class="card"><p class="eyebrow">NEW ALBUM</p><h2>Create an album</h2><form id="album-form"><label>Name<input id="album-name" required maxlength="120" placeholder="Weekend colours"></label><div class="controls"><label>Order<select id="album-order"><option value="sequential">In order</option><option value="shuffle">Shuffle</option></select></label><label>Minutes per image<input id="album-interval" type="number" min="1" value="2"></label></div><label>Framing<select id="album-fit"><option value="crop">Crop to fill</option><option value="contain">Fit with white border</option><option value="stretch">Stretch</option></select></label><label>Time zone<input id="album-time-zone" value="Europe/Copenhagen" required></label><label class="inline-check"><input id="album-enabled" type="checkbox" checked> Album enabled</label><div class="controls"><label>Start window (optional)<input id="album-start" type="datetime-local"></label><label>End window (optional)<input id="album-end" type="datetime-local"></label></div><label>Images<select id="album-assets" multiple required size="6"></select></label><small>Select one or more gallery images. Hold Ctrl/Cmd for several.</small><button type="submit">Create album</button></form></article>
-          <article class="card" id="album-editor" hidden><p class="eyebrow">EDIT ALBUM</p><h2 id="editing-album-name">Album</h2><form id="album-edit-form"><input id="editing-album-id" type="hidden"><div class="controls"><label>Order<select id="editing-album-order"><option value="sequential">In order</option><option value="shuffle">Shuffle</option></select></label><label>Minutes per image<input id="editing-album-interval" type="number" min="1"></label></div><label>Framing<select id="editing-album-fit"><option value="crop">Crop to fill</option><option value="contain">Fit with white border</option><option value="stretch">Stretch</option></select></label><label>Time zone<input id="editing-album-time-zone" required></label><label class="inline-check"><input id="editing-album-enabled" type="checkbox"> Album enabled</label><div class="controls"><label>Start window (optional)<input id="editing-album-start" type="datetime-local"></label><label>End window (optional)<input id="editing-album-end" type="datetime-local"></label></div><label>Images and order<select id="editing-album-assets" multiple required size="6"></select></label><div class="actions"><button id="item-up" type="button" class="secondary">Move selected up</button><button id="item-down" type="button" class="secondary">Move selected down</button></div><button type="submit">Save images and settings</button></form></article>
+        <div id="album-listing">
+          <div class="section-heading page-heading">
+            <div><p class="eyebrow">ALBUMS</p><h2>Display rotations</h2><p class="subtitle">Create an album, choose its images, and run it when you are ready.</p></div>
+            <button id="new-album" type="button">Create album</button>
+          </div>
+          <p id="album-message" class="message" aria-live="polite"></p>
+          <div id="album-list" class="album-list"></div>
         </div>
-        <p id="album-message" class="message" aria-live="polite"></p><div id="album-list" class="album-list"></div>
+
+        <section id="album-editor" class="album-editor" hidden>
+          <div class="section-heading page-heading">
+            <div><p id="album-form-eyebrow" class="eyebrow">NEW ALBUM</p><h2 id="album-form-title">Create an album</h2><p class="subtitle">Pick from your gallery or add new images directly to this album.</p></div>
+            <button id="back-to-albums" class="secondary" type="button">← Albums</button>
+          </div>
+          <form id="album-form">
+            <article class="card album-settings-card">
+              <div class="form-grid">
+                <label>Name<input id="album-name" required maxlength="120" placeholder="Weekend colours"></label>
+                <label>Minutes per image<input id="album-interval" type="number" min="1" value="20" required></label>
+                <label>Order<select id="album-order"><option value="sequential">Play in order</option><option value="shuffle">Shuffle each time</option></select></label>
+              </div>
+            </article>
+
+            <article class="card album-playlist-card">
+              <div class="section-heading small-heading"><div><p class="eyebrow">PLAYLIST</p><h2>Selected <span id="album-count" class="count-badge">0</span></h2></div><button id="open-album-picker" type="button">Add images</button></div>
+              <p id="album-picker-message" class="message" aria-live="polite"></p>
+              <div id="album-sequence" class="album-sequence"></div>
+            </article>
+            <div class="album-save-row"><button id="save-album" type="submit">Create album</button><button id="cancel-album-edit" class="text-button" type="button">Cancel</button></div>
+          </form>
+        </section>
+
       </section>
 
-      <section id="activity-view" class="view" hidden>
-        <div class="section-heading"><div><p class="eyebrow">ACTIVITY</p><h2>What happened</h2></div><button id="refresh-activity" class="secondary" type="button">Refresh</button></div><div id="activity-list" class="activity-list"></div>
-      </section>
+      <dialog id="album-picker-dialog" class="album-picker-dialog">
+          <div class="dialog-heading"><div><p class="eyebrow">GALLERY</p><h2>Add images to album</h2></div><button id="close-album-picker" class="secondary" type="button">Done</button></div>
+          <div class="picker-tools"><label class="search-field" for="album-search"><span>Search gallery</span><input id="album-search" type="search" placeholder="Type a filename"></label><label class="album-upload" for="album-image-file"><input id="album-image-file" type="file" accept="image/jpeg,image/png,image/webp"><span>Upload a new image</span></label></div>
+          <p id="album-library-count" class="message" aria-live="polite"></p>
+          <div id="album-library" class="album-library"></div>
+          <div id="album-picker-sentinel" class="picker-sentinel">Loading more images…</div>
+        </dialog>
 
-      <section id="settings-view" class="view" hidden>
-        <div class="grid settings-grid">
-          <article class="card">
-            <p class="eyebrow">DISPLAY</p><h2>Panel settings</h2>
-            <p class="subtitle">These settings are applied to every rendered preview and artifact.</p>
-            <form id="settings-form" class="compact-form">
-              <label>Physical orientation<select id="orientation"><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label>
-              <label>Panel rotation<select id="rotation"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
-              <button class="secondary" type="submit">Save panel settings</button>
-            </form>
-          </article>
-          <article class="card">
-            <p class="eyebrow">PI CONNECTION</p><h2>Pi pulls from this host</h2>
-            <p class="subtitle">No Pi IP address or inbound Pi port is required. The Pi polls this host, downloads the latest artifact, and reports the result.</p>
-            <form id="connection-settings-form" class="compact-form">
-              <label>Host URL reachable from the Pi<input id="advertised-host" type="url" required placeholder="http://192.168.0.10"></label>
-              <label>Published API port<input id="advertised-port" type="number" min="1" max="65535" required></label>
-              <div class="controls"><label>Poll interval (seconds)<input id="agent-poll-interval" type="number" min="5" max="3600" required></label><label>Heartbeat interval (seconds)<input id="agent-heartbeat-interval" type="number" min="5" max="3600" required></label></div>
-              <label class="inline-check"><input id="agent-auth-required" type="checkbox"> Require a device token</label>
-              <button type="submit">Save connection settings</button>
-            </form>
-            <p id="connection-message" class="message" aria-live="polite"></p>
-            <div class="connection-summary"><strong>Pi server URL</strong><code id="server-url">Loading…</code><p>Changing this does not change Docker's published port. To expose a different port, set <code>INKY_HOST_PORT</code> in <code>.env</code> and restart the host.</p></div>
-          </article>
-        </div>
-      </section>
+      <dialog id="image-editor-dialog" class="image-editor-dialog">
+          <div class="dialog-heading"><div><p id="image-editor-eyebrow" class="eyebrow">EDIT IMAGE</p><h2 id="image-editor-title">Frame image</h2></div><button id="close-image-editor" class="secondary" type="button">Cancel</button></div>
+          <div class="image-editor-layout"><div id="image-editor-frame" class="preview-frame landscape"><canvas id="image-editor-preview" aria-label="Image framing preview"></canvas></div><div class="image-editor-controls"><label>Framing<select id="image-editor-fit"><option value="crop">Crop to fill</option><option value="contain">Fit with white border</option><option value="stretch">Stretch to fit</option></select></label><label>Image rotation<select id="image-editor-rotation"><option value="0">No rotation</option><option value="90">90° clockwise</option><option value="180">180°</option><option value="270">90° counter-clockwise</option></select></label><p id="image-editor-message" class="message" aria-live="polite"></p><button id="save-image-editor" type="button">Save image settings</button></div></div>
+        </dialog>
+
+      <dialog id="quick-play-dialog" class="quick-play-dialog">
+          <div class="dialog-heading"><div><p class="eyebrow">PLAY SELECTED</p><h2>Temporary album</h2></div><button id="close-quick-play" class="secondary" type="button">Cancel</button></div>
+          <p id="quick-play-count" class="subtitle"></p><div class="form-grid"><label>Minutes per image<input id="quick-play-interval" type="number" min="1" value="20" required></label><label>Order<select id="quick-play-order"><option value="sequential">Play in order</option><option value="shuffle">Shuffle each time</option></select></label></div><button id="start-quick-play" type="button">Start selected images</button><p id="quick-play-message" class="message" aria-live="polite"></p>
+      </dialog>
+
+      <section id="activity-view" class="view" hidden><div class="section-heading page-heading"><div><p class="eyebrow">ACTIVITY</p><h2>Recent events</h2></div><button id="refresh-activity" class="secondary" type="button">Refresh</button></div><div id="activity-list" class="activity-list"></div></section>
+
+      <section id="settings-view" class="view" hidden><div class="settings-layout"><article class="card"><p class="eyebrow">DISPLAY</p><h2>Panel settings</h2><p class="subtitle">These apply to every preview and resize.</p><form id="settings-form" class="compact-form"><label>Physical orientation<select id="orientation"><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label><label>Panel rotation<select id="rotation"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label><button class="secondary" type="submit">Save panel settings</button></form></article><article class="card"><p class="eyebrow">PI CONNECTION</p><h2>Pi pulls from this host</h2><p class="subtitle">No Pi IP address or inbound Pi port is required.</p><form id="connection-settings-form" class="compact-form"><label>Host URL reachable from the Pi<input id="advertised-host" type="url" required placeholder="http://192.168.0.10"></label><label>Published API port<input id="advertised-port" type="number" min="1" max="65535" required></label><div class="form-grid"><label>Poll interval (seconds)<input id="agent-poll-interval" type="number" min="5" max="3600" required></label><label>Heartbeat interval (seconds)<input id="agent-heartbeat-interval" type="number" min="5" max="3600" required></label></div><label class="inline-check"><input id="agent-auth-required" type="checkbox"> Require a device token</label><button type="submit">Save connection settings</button></form><p id="connection-message" class="message" aria-live="polite"></p><div class="connection-summary"><strong>Pi server URL</strong><code id="server-url">Loading…</code><p>Changing this does not change Docker's published port.</p></div></article></div></section>
     </main>
     <script src="/static/app.js"></script>
   </body>

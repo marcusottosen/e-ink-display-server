@@ -1,8 +1,4 @@
-"""Fixed display configuration owned by the Docker host.
-
-This module intentionally contains no Pi-side discovery or capability negotiation.
-The server already knows the panel it is controlling.
-"""
+"""Fixed configuration for the panel controlled by the Docker host."""
 
 from inky_contract import (
     DisplayOrientation,

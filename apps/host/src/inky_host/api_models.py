@@ -23,6 +23,14 @@ class AssetResponse(BaseModel):
     created_at: datetime
     deleted_at: datetime | None
     preview_url: str | None = None
+    original_url: str | None = None
+    render_settings: RenderSettings
+
+
+class AssetUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    render_settings: RenderSettings
 
 
 class JobResponse(BaseModel):
@@ -61,6 +69,17 @@ class DisplayResponse(BaseModel):
     desired_job_id: str | None
     last_seen_at: datetime | None
     last_error: str | None
+    current_asset_id: str | None = None
+    current_asset_filename: str | None = None
+    current_preview_url: str | None = None
+    current_album_id: str | None = None
+    current_album_name: str | None = None
+    requested_asset_id: str | None = None
+    requested_asset_filename: str | None = None
+    requested_preview_url: str | None = None
+    requested_album_id: str | None = None
+    requested_album_name: str | None = None
+    active_album_name: str | None = None
     default_render_settings: RenderSettings
 
 
@@ -105,12 +124,11 @@ class AlbumCreate(BaseModel):
     display_id: str = "inky-main"
     asset_ids: list[UUID] = Field(min_length=1)
     order_mode: AlbumOrderMode = AlbumOrderMode.SEQUENTIAL
-    interval_seconds: int = Field(default=120, ge=60, le=86_400)
+    interval_seconds: int = Field(default=1_200, ge=60, le=86_400)
     enabled: bool = True
     time_zone: str = Field(default="Europe/Copenhagen", min_length=1, max_length=64)
     schedule_start_at: datetime | None = None
     schedule_end_at: datetime | None = None
-    default_render_settings: RenderSettings = RenderSettings()
 
     @model_validator(mode="after")
     def validate_schedule_window(self) -> AlbumCreate:
@@ -129,7 +147,6 @@ class AlbumUpdate(BaseModel):
     time_zone: str | None = Field(default=None, min_length=1, max_length=64)
     schedule_start_at: datetime | None = None
     schedule_end_at: datetime | None = None
-    default_render_settings: RenderSettings | None = None
 
     @model_validator(mode="after")
     def validate_complete_schedule_window(self) -> AlbumUpdate:
@@ -162,7 +179,6 @@ class AlbumResponse(BaseModel):
     time_zone: str
     schedule_start_at: datetime | None
     schedule_end_at: datetime | None
-    default_render_settings: RenderSettings
     next_item_index: int
     next_run_at: datetime | None
     items: list[AlbumItemResponse]
@@ -174,6 +190,14 @@ class BulkDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     asset_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
+class QuickPlayRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_ids: list[UUID] = Field(min_length=1, max_length=100)
+    order_mode: AlbumOrderMode = AlbumOrderMode.SEQUENTIAL
+    interval_seconds: int = Field(default=1_200, ge=60, le=86_400)
 
 
 class DeleteResult(BaseModel):

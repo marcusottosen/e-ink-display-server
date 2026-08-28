@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
@@ -16,6 +17,8 @@ from .database import ArtifactRecord, AssetRecord, DisplayJobRecord, DisplayReco
 from .profiles import profile_from_record
 from .rendering import RENDERER_VERSION, artifact_cache_key, render_image, validate_source_image
 from .storage import Storage
+
+logger = logging.getLogger(__name__)
 
 
 class JobStatus(StrEnum):
@@ -41,7 +44,10 @@ class RenderWorker:
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
+        pending_job_ids = await asyncio.to_thread(self._recover_unfinished_jobs)
         self._task = asyncio.create_task(self._run(), name="inky-render-worker")
+        for job_id in pending_job_ids:
+            await self.enqueue(job_id)
 
     async def stop(self) -> None:
         await self._queue.put(None)
@@ -52,12 +58,58 @@ class RenderWorker:
     async def enqueue(self, job_id: str) -> None:
         await self._queue.put(job_id)
 
+    def prepare_asset_preview(
+        self,
+        session: Session,
+        asset: AssetRecord,
+        display: DisplayRecord,
+        settings: RenderSettings,
+    ) -> ArtifactRecord:
+        """Create or reuse the exact display artifact used as an asset preview."""
+
+        asset.width, asset.height = validate_source_image(
+            self._storage.path(asset.storage_path), self._max_source_pixels
+        )
+        return self._cached_or_render(session, asset, profile_from_record(display), settings)
+
+    def _recover_unfinished_jobs(self) -> list[str]:
+        """Put jobs interrupted by a host restart back into the local queue."""
+
+        with self._sessions() as session:
+            interrupted_jobs = session.scalars(
+                select(DisplayJobRecord).where(DisplayJobRecord.status == JobStatus.RENDERING)
+            ).all()
+            for job in interrupted_jobs:
+                job.status = JobStatus.QUEUED
+                record_activity(
+                    session,
+                    "artifact.render-requeued",
+                    f"Requeued interrupted render for display job {job.id}",
+                    display_id=job.display_id,
+                    asset_id=job.asset_id,
+                    job_id=job.id,
+                )
+            queued_job_ids = session.scalars(
+                select(DisplayJobRecord.id).where(DisplayJobRecord.status == JobStatus.QUEUED)
+            ).all()
+            session.commit()
+        return queued_job_ids
+
     async def _run(self) -> None:
         while (job_id := await self._queue.get()) is not None:
             try:
                 await asyncio.to_thread(self._process, job_id)
+            except Exception as error:
+                logger.exception("render worker stopped processing a job", extra={"job_id": job_id})
+                await asyncio.to_thread(self._fail_unhandled_job, job_id, str(error))
             finally:
                 self._queue.task_done()
+
+    def _fail_unhandled_job(self, job_id: str, message: str) -> None:
+        with self._sessions() as session:
+            job = session.get(DisplayJobRecord, job_id)
+            if job is not None and job.status in {JobStatus.QUEUED, JobStatus.RENDERING}:
+                self._fail(session, job, "worker-failed", message)
 
     def _process(self, job_id: str) -> None:
         with self._sessions() as session:
@@ -74,14 +126,13 @@ class RenderWorker:
                 return
 
             try:
-                profile = profile_from_record(display)
                 settings = RenderSettings.model_validate(job.render_settings)
-                asset.width, asset.height = validate_source_image(
-                    self._storage.path(asset.storage_path), self._max_source_pixels
-                )
-                artifact = self._cached_or_render(session, asset, profile, settings)
+                artifact = self.prepare_asset_preview(session, asset, display, settings)
             except Exception as error:
-                self._fail(session, job, "render-failed", str(error))
+                session.rollback()
+                failed_job = session.get(DisplayJobRecord, job_id)
+                if failed_job is not None and failed_job.status != JobStatus.SUPERSEDED:
+                    self._fail(session, failed_job, "render-failed", str(error))
                 return
 
             session.refresh(job)
@@ -136,6 +187,19 @@ class RenderWorker:
             settings,
         )
 
+        same_content = session.scalar(
+            select(ArtifactRecord).where(
+                ArtifactRecord.asset_id == asset.id,
+                ArtifactRecord.sha256 == rendered.sha256,
+            )
+        )
+        if same_content is not None:
+            if not self._storage.path(same_content.storage_path).is_file():
+                same_content.storage_path = self._storage.write_artifact(rendered.content, rendered.sha256)
+            if not self._storage.preview_path(same_content.sha256).is_file():
+                self._storage.write_preview(rendered.preview_content, rendered.sha256)
+            return same_content
+
         relative_path = self._storage.write_artifact(rendered.content, rendered.sha256)
         self._storage.write_preview(rendered.preview_content, rendered.sha256)
         artifact = ArtifactRecord(
@@ -172,23 +236,33 @@ class RenderWorker:
 
 
 def create_display_now_job(
-    session: Session, display: DisplayRecord, asset: AssetRecord, settings: RenderSettings
+    session: Session,
+    display: DisplayRecord,
+    asset: AssetRecord,
+    settings: RenderSettings,
+    album_id: str | None = None,
 ) -> DisplayJobRecord:
-    """Queue a job and invalidate work that can no longer become desired state."""
+    """Queue a job and remove earlier unfinished work from desired state."""
 
     stale_jobs = session.scalars(
         select(DisplayJobRecord).where(
             DisplayJobRecord.display_id == display.id,
-            DisplayJobRecord.status.in_([JobStatus.QUEUED, JobStatus.RENDERING]),
+            DisplayJobRecord.status.in_([JobStatus.QUEUED, JobStatus.RENDERING, JobStatus.READY]),
         )
     )
+    stale_job_ids: set[str] = set()
     for stale_job in stale_jobs:
         stale_job.status = JobStatus.SUPERSEDED
+        stale_job_ids.add(stale_job.id)
+    if display.desired_job_id in stale_job_ids:
+        display.desired_job_id = None
+        display.desired_artifact_id = None
 
     job = DisplayJobRecord(
         id=str(uuid4()),
         display_id=display.id,
         asset_id=asset.id,
+        album_id=album_id,
         status=JobStatus.QUEUED,
         render_settings=settings.model_dump(mode="json"),
     )

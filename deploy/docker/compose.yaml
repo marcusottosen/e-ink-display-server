@@ -8,7 +8,6 @@ services:
       target: tools
     working_dir: /workspace
     environment:
-      INKY_ENV: ${INKY_ENV:-development}
       UV_PROJECT_ENVIRONMENT: /opt/inky-venv
     volumes:
       - ../..:/workspace
@@ -25,6 +24,7 @@ services:
         required: false
     environment:
       INKY_DATA_DIR: /var/lib/inky
+    restart: unless-stopped
     ports:
       - "${INKY_HOST_PORT:-8000}:8000"
     volumes:

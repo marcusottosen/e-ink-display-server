@@ -1,4 +1,4 @@
-"""Pydantic models for the Inky Display System v1 contract."""
+"""Pydantic models shared by the home display host and Pi."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ Sha256 = Annotated[str, Field(pattern=rf"^[a-f0-9]{{{SHA256_HEX_LENGTH}}}$")]
 
 
 class PaletteColor(StrEnum):
-    """The seven target display colours, including the uninked white panel state."""
+    """The seven colours supported by the fixed panel."""
 
     BLACK = "black"
     WHITE = "white"
@@ -66,8 +66,7 @@ class RenderSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     fit_mode: FitMode = FitMode.CROP
-    # Kept only so existing saved render settings remain readable. The host no
-    # longer performs palette conversion or dithering, so this has no effect.
+    # Kept so existing saved render settings remain readable. It has no effect.
     dither_mode: DitherMode = DitherMode.NONE
     content_rotation: DisplayRotation = DisplayRotation.DEGREES_0
     focal_point_x: Annotated[float, Field(ge=0, le=1)] = 0.5
@@ -77,7 +76,7 @@ class RenderSettings(BaseModel):
 
 
 class DisplayProfile(BaseModel):
-    """Fixed server-owned properties of a configured display target."""
+    """Fixed settings for the one configured panel."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -94,13 +93,13 @@ class DisplayProfile(BaseModel):
     @model_validator(mode="after")
     def has_exactly_the_supported_palette(self) -> DisplayProfile:
         if set(self.palette) != set(PaletteColor):
-            msg = "palette must contain each supported display colour exactly once"
+            msg = "palette must contain each panel colour exactly once"
             raise ValueError(msg)
         return self
 
 
 class ArtifactDescriptor(BaseModel):
-    """Metadata required to safely retrieve and verify an immutable artifact."""
+    """Details needed to download and check a generated image."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -122,7 +121,7 @@ class ArtifactDescriptor(BaseModel):
 
 
 class DesiredState(BaseModel):
-    """Latest desired state; old revisions are intentionally not queued to the Pi."""
+    """Newest requested image; older requests are not queued for the Pi."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -136,7 +135,7 @@ class DesiredState(BaseModel):
 
 
 class AgentHeartbeat(BaseModel):
-    """Liveness report from a known agent, not a display capability registration."""
+    """Check-in from the configured Pi, not display registration."""
 
     model_config = ConfigDict(extra="forbid")
 

@@ -22,7 +22,6 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="INKY_", extra="ignore")
 
-    environment: str = "development"
     log_level: str = "INFO"
     data_dir: Path = Path("data")
     database_url: str | None = None
@@ -34,7 +33,7 @@ class Settings(BaseSettings):
     display_orientation: DisplayOrientation = DisplayOrientation.LANDSCAPE
     display_rotation_degrees: DisplayRotation = DisplayRotation.DEGREES_0
     display_time_zone: str = "Europe/Copenhagen"
-    agent_device_token: SecretStr = SecretStr("development-agent-token-change-me")
+    agent_device_token: SecretStr = SecretStr("home-agent-token-change-me")
     agent_auth_required: bool = False
     advertised_host: str = "http://localhost"
     advertised_port: int = 8000
@@ -42,13 +41,10 @@ class Settings(BaseSettings):
     agent_heartbeat_interval_seconds: int = 60
 
     @model_validator(mode="after")
-    def validate_production_token(self) -> Settings:
-        if (
-            self.environment == "production"
-            and self.agent_auth_required
-            and self.agent_device_token.get_secret_value().startswith("development-")
-        ):
-            raise ValueError("INKY_AGENT_DEVICE_TOKEN must be changed in production")
+    def validate_token_when_enabled(self) -> Settings:
+        token = self.agent_device_token.get_secret_value()
+        if self.agent_auth_required and token.startswith(("home-", "development-", "replace-")):
+            raise ValueError("Set INKY_AGENT_DEVICE_TOKEN before enabling device-token checking")
         if not self.advertised_host.startswith(("http://", "https://")):
             raise ValueError("INKY_ADVERTISED_HOST must start with http:// or https://")
         if not 1 <= self.advertised_port <= 65535:

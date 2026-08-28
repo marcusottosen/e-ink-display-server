@@ -1,4 +1,4 @@
-"""SQLite persistence for the first single-display host milestone."""
+"""SQLite storage for the home display tool."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from sqlalchemy import JSON, Boolean, DateTime, Engine, ForeignKey, Integer, String, Text, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+
+from inky_contract import RenderSettings
 
 from .config import Settings
 
@@ -63,6 +65,9 @@ class AssetRecord(Base):
     file_size: Mapped[int] = mapped_column(Integer)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    render_settings: Mapped[dict[str, object]] = mapped_column(
+        JSON, default=lambda: RenderSettings().model_dump(mode="json")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
@@ -89,6 +94,7 @@ class DisplayJobRecord(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     display_id: Mapped[str] = mapped_column(ForeignKey("displays.id"), index=True)
     asset_id: Mapped[str] = mapped_column(ForeignKey("assets.id"), index=True)
+    album_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     artifact_id: Mapped[str | None] = mapped_column(ForeignKey("artifacts.id"), nullable=True)
     revision: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(24), index=True)
@@ -108,9 +114,10 @@ class AlbumRecord(Base):
     display_id: Mapped[str] = mapped_column(ForeignKey("displays.id"), index=True)
     name: Mapped[str] = mapped_column(String(120), unique=True)
     order_mode: Mapped[str] = mapped_column(String(16), default="sequential")
-    interval_seconds: Mapped[int] = mapped_column(Integer, default=120)
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=1_200)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_running: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_temporary: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     time_zone: Mapped[str] = mapped_column(String(64))
     schedule_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     schedule_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -168,10 +175,7 @@ def record_activity(
 
 
 def _apply_sqlite_migrations(engine: Engine) -> None:
-    """Apply additive migrations needed by the first prototype releases.
-
-    Alembic takes over once PostgreSQL and multi-service deployment are introduced.
-    """
+    """Add columns needed when an existing SQLite file is opened by newer code."""
 
     if engine.dialect.name != "sqlite":
         return
@@ -179,6 +183,14 @@ def _apply_sqlite_migrations(engine: Engine) -> None:
         columns = {row[1] for row in connection.execute(text("PRAGMA table_info(assets)"))}
         if "deleted_at" not in columns:
             connection.execute(text("ALTER TABLE assets ADD COLUMN deleted_at DATETIME"))
+        job_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(display_jobs)"))}
+        if "album_id" not in job_columns:
+            connection.execute(text("ALTER TABLE display_jobs ADD COLUMN album_id VARCHAR(36)"))
+        if "render_settings" not in columns:
+            connection.execute(text("ALTER TABLE assets ADD COLUMN render_settings JSON"))
+        album_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(albums)"))}
+        if "is_temporary" not in album_columns:
+            connection.execute(text("ALTER TABLE albums ADD COLUMN is_temporary BOOLEAN NOT NULL DEFAULT 0"))
 
 
 def create_session_factory(settings: Settings) -> sessionmaker[Session]:

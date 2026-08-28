@@ -1,184 +1,490 @@
 const displayId = "inky-main";
-let display = null;
-let showTrash = false;
-
+const state = {
+  display: null, sourceFile: null, sourceImage: null, sourceUrl: null, uploadedAsset: null,
+  albums: [], albumAssets: new Map(), albumDraftIds: [], editingAlbumId: null,
+  pickerAssets: [], pickerOffset: 0, pickerHasMore: true, pickerLoading: false, pickerQuery: "", pickerTimer: null,
+  imageEditor: { mode: null, asset: null, file: null, image: null, sourceUrl: null, returnToAlbumPicker: false },
+};
 const byId = (id) => document.getElementById(id);
 const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[character]);
 
 async function api(url, options = {}) {
   const response = await fetch(url, options);
-  if (response.ok || response.status === 204) return response.status === 204 ? null : response.json();
-  const payload = await response.json().catch(() => ({}));
+  if (response.status === 204) return null;
+  if (response.ok) return response.json();
+  const responseText = await response.text();
+  let payload = {};
+  try { payload = JSON.parse(responseText || "{}"); } catch (_) { /* Use the plain response below. */ }
   const detail = typeof payload.detail === "string" ? payload.detail : payload.detail?.message;
-  throw new Error(detail || "Request failed");
+  throw new Error(detail || responseText || "Request failed (" + response.status + ")");
 }
-
 function setMessage(id, message, kind = "") {
   const element = byId(id);
   element.textContent = message;
-  element.className = `message ${kind}`;
+  element.className = "message " + kind;
 }
-
 function showView(view) {
-  document.querySelectorAll(".view").forEach((element) => {
-    element.hidden = element.id !== `${view}-view`;
-    element.classList.toggle("active", !element.hidden);
-  });
-  document.querySelectorAll(".tab").forEach((element) => element.classList.toggle("active", element.dataset.view === view));
+  document.querySelectorAll(".view").forEach((element) => { element.hidden = element.id !== view + "-view"; });
+  document.querySelectorAll(".tab").forEach((element) => { element.classList.toggle("active", element.dataset.view === view); });
   if (view === "gallery") loadGallery();
   if (view === "albums") loadAlbums();
   if (view === "activity") loadActivity();
   if (view === "settings") loadConnectionSettings();
 }
-
-function renderDisplay(nextDisplay) {
-  display = nextDisplay;
+function previewDimensions() {
+  if (!state.display) return [800, 480];
+  return [90, 270].includes(Number(state.display.rotation)) ? [state.display.height, state.display.width] : [state.display.width, state.display.height];
+}
+function renderDisplayImage(targetId, imageData, emptyMessage) {
+  const target = byId(targetId);
+  const filename = imageData.filename;
+  const image = imageData.previewUrl
+    ? '<img src="' + imageData.previewUrl + '" alt="' + escapeHtml(filename) + '">'
+    : '<div class="current-display-empty">' + emptyMessage + '</div>';
+  const name = filename ? '<strong>' + escapeHtml(filename) + '</strong>' : '<strong>Nothing yet</strong>';
+  const source = filename ? (imageData.albumName ? 'From album: <strong>' + escapeHtml(imageData.albumName) + '</strong>' : 'Single image') : "";
+  target.innerHTML = image + '<div class="current-display-copy">' + name + '<p>' + source + '</p></div>';
+}
+function renderDisplayStates() {
+  const display = state.display;
+  renderDisplayImage("current-display", {
+    filename: display?.current_asset_filename,
+    previewUrl: display?.current_preview_url ? display.current_preview_url + '?v=' + display.current_revision : null,
+    albumName: display?.current_album_name,
+  }, "The Pi has not confirmed an image yet.");
+  renderDisplayImage("requested-display", {
+    filename: display?.requested_asset_filename,
+    previewUrl: display?.requested_preview_url ? display.requested_preview_url + '?v=' + display.desired_revision : null,
+    albumName: display?.requested_album_name,
+  }, "No image is available to the Pi.");
+  return display?.active_album_name ? 'Running: ' + display.active_album_name : 'Not running';
+}
+function renderDisplay(display) {
+  state.display = display;
   byId("orientation").value = display.orientation;
   byId("rotation").value = display.rotation;
-  byId("preview-frame").className = `preview-frame ${display.orientation}`;
-  byId("preview-meta").textContent = `${display.width} × ${display.height} • ${display.orientation}`;
-  const details = [["Current revision", display.current_revision], ["Desired revision", display.desired_revision], ["Last heartbeat", display.last_seen_at ? new Date(display.last_seen_at).toLocaleString() : "Not seen yet"], ["Last error", display.last_error || "None"]];
-  byId("display-details").innerHTML = details.map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join("");
-  const status = byId("connection-status");
-  status.textContent = display.last_seen_at ? "Agent seen" : "Waiting for agent";
-  status.className = `status ${display.last_seen_at ? "good" : "neutral"}`;
+  const dimensions = previewDimensions();
+  const frame = byId("preview-frame");
+  frame.classList.toggle("portrait", dimensions[1] > dimensions[0]);
+  frame.classList.toggle("landscape", dimensions[0] >= dimensions[1]);
+  byId("preview-meta").textContent = dimensions[0] + " × " + dimensions[1] + " • " + (dimensions[1] > dimensions[0] ? "portrait" : "landscape");
+  byId("stop-playback").disabled = !display.active_album_name;
+  const albumState = renderDisplayStates();
+  byId("display-details").innerHTML = [
+    ["Album", albumState],
+    ["Last Pi check-in", display.last_seen_at ? new Date(display.last_seen_at).toLocaleString() : "Not seen yet"],
+    ["Last error", display.last_error || "None"],
+  ].map(([label, value]) => "<div><dt>" + label + "</dt><dd>" + escapeHtml(value) + "</dd></div>").join("");
+  renderLocalPreview();
+}
+async function loadDisplay() { renderDisplay(await api("/api/v1/displays/" + displayId)); }
+async function loadDashboard() {
+  const results = await Promise.all([api("/api/v1/displays/" + displayId), api("/api/v1/albums")]);
+  state.albums = results[1];
+  renderDisplay(results[0]);
 }
 
-async function loadDisplay() { renderDisplay(await api(`/api/v1/displays/${displayId}`)); }
-
-function showPreview(url, hash) {
-  const image = byId("preview");
-  image.src = `${url}?v=${hash || Date.now()}`;
-  image.hidden = false;
-  byId("preview-placeholder").hidden = true;
+function rotatedCanvas(image, degrees) {
+  const swap = degrees === 90 || degrees === 270;
+  const canvas = document.createElement("canvas");
+  canvas.width = swap ? image.naturalHeight : image.naturalWidth;
+  canvas.height = swap ? image.naturalWidth : image.naturalHeight;
+  const context = canvas.getContext("2d");
+  context.translate(canvas.width / 2, canvas.height / 2);
+  context.rotate((degrees * Math.PI) / 180);
+  context.drawImage(image, -image.naturalWidth / 2, -image.naturalHeight / 2);
+  return canvas;
 }
-
-async function pollJob(jobId) {
-  const job = await api(`/api/v1/jobs/${jobId}`);
-  if (job.preview_url) showPreview(job.preview_url, job.artifact_sha256);
-  const labels = {
-    queued: "Queued for rendering…",
-    rendering: "Resizing the display image…",
-    ready: display?.last_seen_at ? "Ready for the Pi to refresh the display." : "Artifact is ready; waiting for the offline Pi to reconnect.",
-    started: "The Pi is refreshing the e-ink panel…",
-    completed: "The display refresh completed.",
-    superseded: "Replaced by a newer display request.",
-    failed: `Could not prepare the image: ${job.error_message || "unknown error"}`,
-  };
-  setMessage("job-message", labels[job.status] || `Job state: ${job.status}`, job.status === "failed" ? "error" : "");
-  await loadDisplay();
-  if (["queued", "rendering", "ready", "started"].includes(job.status)) {
-    window.setTimeout(() => pollJob(jobId).catch((error) => setMessage("job-message", error.message, "error")), 1500);
+function drawFramedImage(image, canvas, fitMode, rotation) {
+  if (!image || !state.display) return;
+  const dimensions = previewDimensions();
+  canvas.width = dimensions[0]; canvas.height = dimensions[1];
+  const context = canvas.getContext("2d");
+  context.imageSmoothingEnabled = true; context.imageSmoothingQuality = "high";
+  context.fillStyle = "#ffffff"; context.fillRect(0, 0, dimensions[0], dimensions[1]);
+  const source = rotatedCanvas(image, Number(rotation));
+  const framing = fitMode;
+  if (framing === "stretch") context.drawImage(source, 0, 0, dimensions[0], dimensions[1]);
+  else {
+    const scale = framing === "crop" ? Math.max(dimensions[0] / source.width, dimensions[1] / source.height) : Math.min(dimensions[0] / source.width, dimensions[1] / source.height);
+    const width = Math.round(source.width * scale); const height = Math.round(source.height * scale);
+    context.drawImage(source, Math.round((dimensions[0] - width) / 2), Math.round((dimensions[1] - height) / 2), width, height);
   }
-  return job;
 }
-
-async function displayAsset(assetId) {
-  const job = await api(`/api/v1/displays/${displayId}/display-now`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_id: assetId }),
-  });
+function renderLocalPreview() {
+  if (!state.sourceImage || !state.display) return;
+  const canvas = byId("local-preview");
+  drawFramedImage(state.sourceImage, canvas, byId("fit-mode").value, byId("content-rotation").value);
+  byId("preview-placeholder").hidden = true;
+  byId("preview-workspace").hidden = false;
+  canvas.hidden = false;
+}
+function renderSettings() {
+  return { fit_mode: byId("fit-mode").value, content_rotation: Number(byId("content-rotation").value), focal_point_x: 0.5, focal_point_y: 0.5, flip_horizontal: false, flip_vertical: false };
+}
+function isSupportedImage(file) { return file && /^(image\/jpeg|image\/png|image\/webp)$/.test(file.type); }
+async function uploadAssetFile(file) {
+  if (!isSupportedImage(file)) throw new Error("Choose a JPEG, PNG, or WebP image.");
+  const data = new FormData(); data.append("file", file);
+  return api("/api/v1/assets", { method: "POST", body: data });
+}
+async function updateAssetSettings(assetId, settings) {
+  return api("/api/v1/assets/" + assetId, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ render_settings: settings }) });
+}
+async function uploadCurrentImage(settings = renderSettings()) {
+  if (!state.sourceFile) throw new Error("Choose an image first");
+  if (!state.uploadedAsset) state.uploadedAsset = await uploadAssetFile(state.sourceFile);
+  state.uploadedAsset = await updateAssetSettings(state.uploadedAsset.id, settings);
+  return state.uploadedAsset;
+}
+function setUploadButtons(disabled) { byId("upload-button").disabled = disabled; byId("display-button").disabled = disabled; }
+function selectSourceFile(file) {
+  if (!file) return;
+  if (!isSupportedImage(file)) { setMessage("job-message", "Choose a JPEG, PNG, or WebP image.", "error"); return; }
+  if (state.sourceUrl) URL.revokeObjectURL(state.sourceUrl);
+  state.sourceFile = file; state.sourceUrl = URL.createObjectURL(file); state.uploadedAsset = null;
+  byId("file-label").textContent = file.name;
+  const image = new Image();
+  image.onload = () => {
+    state.sourceImage = image; renderLocalPreview(); setUploadButtons(false);
+    setMessage("job-message", "This preview is only in your browser. Nothing has been uploaded.");
+  };
+  image.onerror = () => setMessage("job-message", "This image could not be previewed.", "error");
+  image.src = state.sourceUrl;
+}
+function imageEditorSettings() {
+  return {
+    fit_mode: byId("image-editor-fit").value,
+    content_rotation: Number(byId("image-editor-rotation").value),
+    focal_point_x: 0.5, focal_point_y: 0.5, flip_horizontal: false, flip_vertical: false,
+  };
+}
+function renderImageEditorPreview() {
+  const editor = state.imageEditor;
+  if (!editor.image || !state.display) return;
+  const dimensions = previewDimensions();
+  const frame = byId("image-editor-frame");
+  frame.classList.toggle("portrait", dimensions[1] > dimensions[0]);
+  frame.classList.toggle("landscape", dimensions[0] >= dimensions[1]);
+  drawFramedImage(editor.image, byId("image-editor-preview"), byId("image-editor-fit").value, byId("image-editor-rotation").value);
+}
+function closeImageEditor() {
+  const editor = state.imageEditor;
+  const returnToAlbumPicker = editor.returnToAlbumPicker;
+  if (editor.file && editor.sourceUrl) URL.revokeObjectURL(editor.sourceUrl);
+  state.imageEditor = { mode: null, asset: null, file: null, image: null, sourceUrl: null, returnToAlbumPicker: false };
+  byId("image-editor-dialog").close();
+  if (returnToAlbumPicker && !byId("album-picker-dialog").open) byId("album-picker-dialog").showModal();
+}
+function openImageEditor(mode, asset = null, file = null, returnToAlbumPicker = false) {
+  const editor = state.imageEditor;
+  if (editor.file && editor.sourceUrl) URL.revokeObjectURL(editor.sourceUrl);
+  if (file && !isSupportedImage(file)) { setMessage("gallery-message", "Choose a JPEG, PNG, or WebP image.", "error"); return; }
+  const settings = asset?.render_settings || { fit_mode: "crop", content_rotation: 0 };
+  state.imageEditor = { mode, asset, file, image: null, sourceUrl: file ? URL.createObjectURL(file) : asset.original_url, returnToAlbumPicker };
+  byId("image-editor-eyebrow").textContent = mode === "album-upload" ? "ADD TO ALBUM" : "EDIT IMAGE";
+  byId("image-editor-title").textContent = mode === "album-upload" ? "Frame the new image" : "Frame " + asset.original_filename;
+  byId("save-image-editor").textContent = mode === "album-upload" ? "Add to album" : "Save image settings";
+  byId("image-editor-fit").value = settings.fit_mode || "crop";
+  byId("image-editor-rotation").value = String(settings.content_rotation || 0);
+  setMessage("image-editor-message", mode === "album-upload" ? "This image is only in your browser until you add it." : "Changes apply whenever this image is displayed.");
+  const dialog = byId("image-editor-dialog");
+  if (!dialog.open) dialog.showModal();
+  const image = new Image();
+  image.onload = () => { state.imageEditor.image = image; renderImageEditorPreview(); };
+  image.onerror = () => setMessage("image-editor-message", "This image could not be loaded.", "error");
+  image.src = state.imageEditor.sourceUrl;
+}
+async function saveImageEditor() {
+  const editor = state.imageEditor;
+  if (!editor.mode) return;
+  const button = byId("save-image-editor");
+  button.disabled = true;
+  try {
+    const settings = imageEditorSettings();
+    if (editor.mode === "asset") {
+      const asset = await updateAssetSettings(editor.asset.id, settings);
+      state.albumAssets.set(asset.id, asset);
+      setMessage("gallery-message", "Image settings saved.");
+      closeImageEditor(); await loadGallery();
+    } else {
+      const asset = await updateAssetSettings((await uploadAssetFile(editor.file)).id, settings);
+      state.albumAssets.set(asset.id, asset); state.pickerAssets.unshift(asset);
+      if (!state.albumDraftIds.includes(asset.id)) state.albumDraftIds.push(asset.id);
+      renderAlbumPlaylist(); renderAlbumPicker(); closeImageEditor();
+      setMessage("album-picker-message", '"' + asset.original_filename + '" was added to this album.');
+    }
+  } catch (error) { setMessage("image-editor-message", error.message, "error"); }
+  finally { button.disabled = false; }
+}
+async function waitForJob(jobId) {
+  const job = await api("/api/v1/jobs/" + jobId);
+  const labels = {
+    queued: "Queued for resize…", rendering: "Resizing the display image…",
+    ready: "Ready for the Pi to refresh.", started: "The Pi is refreshing the e-ink panel…",
+    completed: "The display refresh completed.", superseded: "Replaced by a newer display request.",
+    failed: "Could not prepare the image: " + (job.error_message || "unknown error"),
+  };
+  setMessage("job-message", labels[job.status] || "Job state: " + job.status, job.status === "failed" ? "error" : "");
+  await loadDashboard();
+  if (["queued", "rendering", "ready", "started"].includes(job.status)) window.setTimeout(() => waitForJob(jobId).catch((error) => setMessage("job-message", error.message, "error")), 1500);
+}
+async function displayAsset(assetId, settings = null) {
+  const job = await api("/api/v1/displays/" + displayId + "/display-now", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_id: assetId, render_settings: settings }) });
   showView("dashboard");
-  await pollJob(job.id);
+  await waitForJob(job.id);
+}
+function assetPreview(asset, className = "") {
+  const settings = asset.render_settings || {};
+  const previewVersion = [asset.sha256, settings.fit_mode, settings.content_rotation, settings.focal_point_x, settings.focal_point_y, settings.flip_horizontal, settings.flip_vertical].join("-");
+  return '<img class="' + className + '" loading="lazy" src="' + asset.preview_url + '?v=' + encodeURIComponent(previewVersion) + '" alt="' + escapeHtml(asset.original_filename) + '">';
 }
 
 async function loadGallery() {
-  const assets = await api(`/api/v1/assets?include_deleted=${showTrash}`);
-  byId("show-trash").textContent = showTrash ? "Hide trash" : "Show trash";
-  byId("gallery-grid").innerHTML = assets.map((asset) => {
-    const preview = asset.preview_url ? `<img src="${asset.preview_url}?v=${asset.sha256}" alt="${escapeHtml(asset.original_filename)}">` : '<div class="thumbnail-placeholder">Not rendered yet</div>';
-    const action = asset.deleted_at ? `<button data-restore="${asset.id}" class="secondary">Restore</button>` : `<button data-display="${asset.id}">Display now</button><button data-delete="${asset.id}" class="danger">Trash</button>`;
-    return `<article class="asset-card ${asset.deleted_at ? "trashed" : ""}"><label class="select-asset"><input type="checkbox" value="${asset.id}" ${asset.deleted_at ? "disabled" : ""}> Select</label>${preview}<h3>${escapeHtml(asset.original_filename)}</h3><p>${asset.width ? `${asset.width} × ${asset.height}` : "Waiting to render"} • ${(asset.file_size / 1024 / 1024).toFixed(1)} MiB</p><div class="asset-actions">${action}</div></article>`;
-  }).join("") || "<p class=\"empty\">No images here yet. Upload one from the dashboard.</p>";
+  const assets = await api("/api/v1/assets?limit=100");
+  byId("gallery-grid").innerHTML = assets.map((asset) => '<article class="asset-card"><label class="select-asset"><input type="checkbox" value="' + asset.id + '"> Select</label>' + assetPreview(asset) + '<div class="asset-info"><h3>' + escapeHtml(asset.original_filename) + '</h3><p>' + (asset.width ? asset.width + " × " + asset.height : "Original image") + " · " + (asset.file_size / 1024 / 1024).toFixed(1) + ' MiB</p></div><div class="asset-actions"><button data-display="' + asset.id + '" type="button">Display now</button><button data-edit="' + asset.id + '" type="button" class="secondary">Edit</button><button data-delete="' + asset.id + '" class="danger" type="button">Delete</button></div></article>').join("") || '<p class="empty">No images here yet. Start from the dashboard.</p>';
   byId("gallery-grid").querySelectorAll("[data-display]").forEach((button) => button.addEventListener("click", () => displayAsset(button.dataset.display).catch((error) => setMessage("gallery-message", error.message, "error"))));
-  byId("gallery-grid").querySelectorAll("[data-delete]").forEach((button) => button.addEventListener("click", () => deleteAssets([button.dataset.delete])));
-  byId("gallery-grid").querySelectorAll("[data-restore]").forEach((button) => button.addEventListener("click", async () => { await api(`/api/v1/assets/${button.dataset.restore}/restore`, { method: "POST" }); setMessage("gallery-message", "Image restored."); loadGallery(); }));
+  byId("gallery-grid").querySelectorAll("[data-edit]").forEach((button) => button.addEventListener("click", () => openImageEditor("asset", assets.find((asset) => asset.id === button.dataset.edit))));
+  byId("gallery-grid").querySelectorAll("[data-delete]").forEach((button) => button.addEventListener("click", () => deleteAssets([button.dataset.delete]).catch((error) => setMessage("gallery-message", error.message, "error"))));
 }
-
 async function deleteAssets(assetIds) {
-  if (!assetIds.length || !window.confirm(`Move ${assetIds.length} image(s) to Trash?`)) return;
-  const result = await api("/api/v1/assets/bulk-delete", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_ids: assetIds }),
-  });
-  setMessage("gallery-message", result.deleted_ids.length ? `Moved ${result.deleted_ids.length} image(s) to Trash.` : "Nothing moved.");
-  loadGallery();
+  if (!assetIds.length || !window.confirm("Permanently delete " + assetIds.length + " image(s)? This cannot be undone.")) return;
+  const result = await api("/api/v1/assets/bulk-delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_ids: assetIds }) });
+  setMessage("gallery-message", "Deleted " + result.deleted_ids.length + " image(s).");
+  assetIds.forEach((id) => state.albumAssets.delete(id));
+  state.pickerAssets = state.pickerAssets.filter((asset) => !assetIds.includes(asset.id));
+  await loadGallery();
+  renderAlbumPicker();
 }
-
-function fillAssetSelect(select, assets, selected = []) {
-  const visible = assets.filter((asset) => !asset.deleted_at);
-  const ordered = [...selected.map((id) => visible.find((asset) => asset.id === id)).filter(Boolean), ...visible.filter((asset) => !selected.includes(asset.id))];
-  select.innerHTML = ordered.map((asset) => `<option value="${asset.id}" ${selected.includes(asset.id) ? "selected" : ""}>${escapeHtml(asset.original_filename)}</option>`).join("");
+function selectedGalleryIds() {
+  return [...document.querySelectorAll("#gallery-grid input[type=checkbox]:checked")].map((input) => input.value);
 }
-
-const inputDate = (value) => value ? new Date(value).toISOString().slice(0, 16) : "";
-const isoDate = (value) => value ? new Date(value).toISOString() : null;
-
-function moveSelectedOptions(select, direction) {
-  const selected = [...select.selectedOptions];
-  const ordered = direction < 0 ? selected : selected.reverse();
-  ordered.forEach((option) => {
-    const sibling = direction < 0 ? option.previousElementSibling : option.nextElementSibling;
-    if (sibling) select.insertBefore(direction < 0 ? option : sibling, direction < 0 ? sibling : option);
-  });
+function openQuickPlay() {
+  const assetIds = selectedGalleryIds();
+  if (!assetIds.length) { setMessage("gallery-message", "Select at least one image first.", "error"); return; }
+  byId("quick-play-count").textContent = assetIds.length + " selected image" + (assetIds.length === 1 ? "" : "s") + ". This does not create a saved album.";
+  setMessage("quick-play-message", "");
+  byId("quick-play-dialog").showModal();
 }
+async function startQuickPlay() {
+  const assetIds = selectedGalleryIds();
+  if (!assetIds.length) { closeQuickPlay(); return; }
+  const button = byId("start-quick-play");
+  button.disabled = true;
+  try {
+    await api("/api/v1/displays/" + displayId + "/play-selection", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_ids: assetIds, order_mode: byId("quick-play-order").value, interval_seconds: Number(byId("quick-play-interval").value) * 60 }) });
+    closeQuickPlay(); showView("dashboard"); await loadDashboard();
+    setMessage("job-message", "Selected images are running.");
+  } catch (error) { setMessage("quick-play-message", error.message, "error"); }
+  finally { button.disabled = false; }
+}
+function closeQuickPlay() { byId("quick-play-dialog").close(); }
 
+function selectedAssets() { return state.albumDraftIds.map((id) => state.albumAssets.get(id)).filter(Boolean); }
+function renderAlbumPlaylist() {
+  const selected = selectedAssets();
+  state.albumDraftIds = selected.map((asset) => asset.id);
+  byId("album-count").textContent = selected.length;
+  byId("album-sequence").innerHTML = selected.map((asset, index) => '<article class="sequence-item">' + assetPreview(asset, "sequence-thumb") + '<div><strong>' + escapeHtml(asset.original_filename) + "</strong><span>Position " + (index + 1) + '</span></div><div class="sequence-actions"><button data-move-up="' + index + '" class="icon-button secondary" type="button" aria-label="Move up" ' + (index === 0 ? "disabled" : "") + '>↑</button><button data-move-down="' + index + '" class="icon-button secondary" type="button" aria-label="Move down" ' + (index === selected.length - 1 ? "disabled" : "") + '>↓</button><button data-remove="' + asset.id + '" class="icon-button danger" type="button" aria-label="Remove from album">×</button></div></article>').join("") || '<p class="empty playlist-empty">Use “Add images” to build this album.</p>';
+  byId("album-sequence").querySelectorAll("[data-remove]").forEach((button) => button.addEventListener("click", () => { state.albumDraftIds = state.albumDraftIds.filter((id) => id !== button.dataset.remove); renderAlbumPlaylist(); renderAlbumPicker(); }));
+  byId("album-sequence").querySelectorAll("[data-move-up]").forEach((button) => button.addEventListener("click", () => moveAlbumItem(Number(button.dataset.moveUp), -1)));
+  byId("album-sequence").querySelectorAll("[data-move-down]").forEach((button) => button.addEventListener("click", () => moveAlbumItem(Number(button.dataset.moveDown), 1)));
+}
+function renderAlbumPicker() {
+  const list = byId("album-library");
+  if (!list) return;
+  byId("album-library-count").textContent = state.pickerAssets.length + " loaded" + (state.pickerHasMore ? " · keep scrolling for more" : "");
+  list.innerHTML = state.pickerAssets.map((asset) => {
+    const chosen = state.albumDraftIds.includes(asset.id);
+    return '<article class="picker-item ' + (chosen ? "selected" : "") + '">' + assetPreview(asset, "picker-thumb") + '<div><strong>' + escapeHtml(asset.original_filename) + '</strong><span>' + (asset.width ? asset.width + " × " + asset.height : "Original image") + '</span></div><button data-add="' + asset.id + '" class="' + (chosen ? "secondary" : "") + '" type="button" ' + (chosen ? "disabled" : "") + ">" + (chosen ? "Added" : "Add") + "</button></article>";
+  }).join("") || '<p class="empty">No gallery images match that search.</p>';
+  list.querySelectorAll("[data-add]").forEach((button) => button.addEventListener("click", () => {
+    state.albumDraftIds.push(button.dataset.add); renderAlbumPlaylist(); renderAlbumPicker();
+  }));
+  byId("album-picker-sentinel").hidden = !state.pickerHasMore;
+}
+function moveAlbumItem(index, direction) {
+  const next = index + direction;
+  if (next < 0 || next >= state.albumDraftIds.length) return;
+  [state.albumDraftIds[index], state.albumDraftIds[next]] = [state.albumDraftIds[next], state.albumDraftIds[index]];
+  renderAlbumPlaylist();
+}
+async function resetAlbumPicker() {
+  state.pickerAssets = []; state.pickerOffset = 0; state.pickerHasMore = true;
+  await loadAlbumPickerPage();
+}
+async function loadAlbumPickerPage() {
+  if (state.pickerLoading || !state.pickerHasMore) return;
+  state.pickerLoading = true;
+  const params = new URLSearchParams({ limit: "40", offset: String(state.pickerOffset), query: state.pickerQuery });
+  try {
+    const assets = await api("/api/v1/assets?" + params);
+    assets.forEach((asset) => state.albumAssets.set(asset.id, asset));
+    state.pickerAssets.push(...assets);
+    state.pickerOffset += assets.length;
+    state.pickerHasMore = assets.length === 40;
+    renderAlbumPicker();
+  } catch (error) { setMessage("album-picker-message", error.message, "error"); }
+  finally { state.pickerLoading = false; }
+}
+async function openAlbumPicker() {
+  const dialog = byId("album-picker-dialog");
+  if (!dialog.open) dialog.showModal();
+  state.pickerQuery = "";
+  byId("album-search").value = "";
+  byId("album-search").focus();
+  await resetAlbumPicker();
+}
+function closeAlbumPicker() { byId("album-picker-dialog").close(); }
+function showAlbumEditor() { byId("album-listing").hidden = true; byId("album-editor").hidden = false; byId("album-name").focus(); }
+function closeAlbumEditor() {
+  closeAlbumPicker();
+  byId("album-editor").hidden = true; byId("album-listing").hidden = false;
+  state.editingAlbumId = null; state.albumDraftIds = []; state.albumAssets.clear();
+}
+function resetAlbumEditor() {
+  state.editingAlbumId = null; state.albumDraftIds = []; state.albumAssets.clear();
+  byId("album-form").reset(); byId("album-interval").value = 20;
+  byId("album-form-title").textContent = "Create an album"; byId("album-form-eyebrow").textContent = "NEW ALBUM"; byId("save-album").textContent = "Create album";
+  setMessage("album-picker-message", ""); renderAlbumPlaylist();
+}
+function startNewAlbum() { resetAlbumEditor(); showAlbumEditor(); }
+function editAlbum(album) {
+  state.editingAlbumId = album.id; state.albumDraftIds = album.items.map((item) => item.asset_id);
+  state.albumAssets.clear(); album.items.forEach((item) => state.albumAssets.set(item.asset.id, item.asset));
+  byId("album-name").value = album.name; byId("album-interval").value = Math.round(album.interval_seconds / 60);
+  byId("album-order").value = album.order_mode;
+  byId("album-form-title").textContent = "Edit " + album.name; byId("album-form-eyebrow").textContent = "EDIT ALBUM"; byId("save-album").textContent = "Save album";
+  setMessage("album-picker-message", ""); renderAlbumPlaylist(); showAlbumEditor(); window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function renderAlbumList() {
+  byId("album-list").innerHTML = state.albums.map((album) => '<article class="album-card"><div class="album-card-content"><div><p class="eyebrow">' + (album.is_running ? "RUNNING NOW" : "ALBUM") + "</p><h3>" + escapeHtml(album.name) + "</h3><p>" + album.items.length + " image" + (album.items.length === 1 ? "" : "s") + " · " + (album.order_mode === "shuffle" ? "Shuffle" : "In order") + " · every " + Math.round(album.interval_seconds / 60) + ' minutes</p></div><div class="album-thumbs">' + (album.items.slice(0, 6).map((item) => assetPreview(item.asset, "album-thumb")).join("") || "<span>Empty</span>") + '</div></div><div class="album-actions"><button data-run="' + album.id + '" type="button">' + (album.is_running ? "Restart" : "Run") + '</button><button data-stop="' + album.id + '" class="secondary" type="button" ' + (album.is_running ? "" : "disabled") + '>Stop</button><button data-edit="' + album.id + '" class="secondary" type="button">Edit</button><button data-delete-album="' + album.id + '" class="danger" type="button">Delete</button></div></article>').join("") || '<p class="empty">No albums yet. Create one when you are ready.</p>';
+  byId("album-list").querySelectorAll("[data-run]").forEach((button) => button.addEventListener("click", () => albumAction(button.dataset.run, "run", "Album is running.")));
+  byId("album-list").querySelectorAll("[data-stop]").forEach((button) => button.addEventListener("click", () => albumAction(button.dataset.stop, "stop", "Album stopped.")));
+  byId("album-list").querySelectorAll("[data-edit]").forEach((button) => button.addEventListener("click", () => editAlbum(state.albums.find((album) => album.id === button.dataset.edit))));
+  byId("album-list").querySelectorAll("[data-delete-album]").forEach((button) => button.addEventListener("click", () => deleteAlbum(button.dataset.deleteAlbum)));
+}
+async function albumAction(id, action, message) {
+  try { await api("/api/v1/albums/" + id + "/" + action, { method: "POST" }); setMessage("album-message", message); await loadAlbums(); }
+  catch (error) { setMessage("album-message", error.message, "error"); }
+}
+async function deleteAlbum(id) {
+  if (!window.confirm("Delete this album?")) return;
+  try { await api("/api/v1/albums/" + id, { method: "DELETE" }); setMessage("album-message", "Album deleted."); await loadAlbums(); }
+  catch (error) { setMessage("album-message", error.message, "error"); }
+}
 async function loadAlbums() {
-  const [albums, assets] = await Promise.all([api("/api/v1/albums"), api("/api/v1/assets")]);
-  fillAssetSelect(byId("album-assets"), assets);
-  byId("album-list").innerHTML = albums.map((album) => `<article class="album-card"><div><p class="eyebrow">${album.is_running ? "RUNNING" : "ALBUM"}</p><h3>${escapeHtml(album.name)}</h3><p>${album.items.length} images • ${album.order_mode} • every ${Math.round(album.interval_seconds / 60)} minute(s)</p><div class="album-thumbs">${album.items.map((item) => item.asset.preview_url ? `<img src="${item.asset.preview_url}?v=${item.asset.sha256}" alt="">` : "<span>○</span>").join("")}</div></div><div class="album-actions"><button data-run="${album.id}">${album.is_running ? "Restart" : "Run"}</button><button data-stop="${album.id}" class="secondary" ${album.is_running ? "" : "disabled"}>Stop</button><button data-edit="${album.id}" class="secondary">Edit</button><button data-delete-album="${album.id}" class="danger">Delete</button></div></article>`).join("") || "<p class=\"empty\">Create an album from your gallery images.</p>";
-  byId("album-list").querySelectorAll("[data-run]").forEach((button) => button.addEventListener("click", async () => { await api(`/api/v1/albums/${button.dataset.run}/run`, { method: "POST" }); setMessage("album-message", "Album started; the first image is being prepared."); loadAlbums(); }));
-  byId("album-list").querySelectorAll("[data-stop]").forEach((button) => button.addEventListener("click", async () => { await api(`/api/v1/albums/${button.dataset.stop}/stop`, { method: "POST" }); setMessage("album-message", "Album stopped."); loadAlbums(); }));
-  byId("album-list").querySelectorAll("[data-edit]").forEach((button) => button.addEventListener("click", () => openAlbumEditor(albums.find((album) => album.id === button.dataset.edit), assets)));
-  byId("album-list").querySelectorAll("[data-delete-album]").forEach((button) => button.addEventListener("click", async () => { if (!window.confirm("Delete this stopped album?")) return; await api(`/api/v1/albums/${button.dataset.deleteAlbum}`, { method: "DELETE" }); loadAlbums(); }));
+  state.albums = await api("/api/v1/albums");
+  renderAlbumList();
+  if (state.display) renderDisplay(state.display);
 }
-
-function openAlbumEditor(album, assets) {
-  if (!album) return;
-  byId("album-editor").hidden = false;
-  byId("editing-album-id").value = album.id;
-  byId("editing-album-name").textContent = album.name;
-  byId("editing-album-order").value = album.order_mode;
-  byId("editing-album-interval").value = Math.round(album.interval_seconds / 60);
-  byId("editing-album-fit").value = album.default_render_settings.fit_mode;
-  byId("editing-album-time-zone").value = album.time_zone;
-  byId("editing-album-enabled").checked = album.enabled;
-  byId("editing-album-start").value = inputDate(album.schedule_start_at);
-  byId("editing-album-end").value = inputDate(album.schedule_end_at);
-  fillAssetSelect(byId("editing-album-assets"), assets, album.items.map((item) => item.asset_id));
-  byId("album-editor").scrollIntoView({ behavior: "smooth" });
+async function uploadAlbumImage(file) {
+  if (!file) return;
+  byId("album-image-file").value = "";
+  closeAlbumPicker();
+  openImageEditor("album-upload", null, file, true);
 }
-
+async function stopPlayback() {
+  const button = byId("stop-playback");
+  button.disabled = true;
+  try {
+    await api("/api/v1/displays/" + displayId + "/stop-playback", { method: "POST" });
+    await loadDashboard();
+    setMessage("job-message", "Playback stopped.");
+  } catch (error) { setMessage("job-message", error.message, "error"); }
+  finally { button.disabled = !state.display?.active_album_name; }
+}
+async function saveAlbum(event) {
+  event.preventDefault();
+  if (!state.albumDraftIds.length) { setMessage("album-picker-message", "Use Add images to choose at least one image.", "error"); return; }
+  const settings = {
+    name: byId("album-name").value, order_mode: byId("album-order").value,
+    interval_seconds: Number(byId("album-interval").value) * 60, enabled: true,
+    time_zone: state.display?.time_zone || "Europe/Copenhagen", schedule_start_at: null, schedule_end_at: null,
+  };
+  try {
+    if (state.editingAlbumId) {
+      await api("/api/v1/albums/" + state.editingAlbumId, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
+      await api("/api/v1/albums/" + state.editingAlbumId + "/items", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_ids: state.albumDraftIds }) });
+      setMessage("album-message", "Album updated.");
+    } else {
+      await api("/api/v1/albums", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...settings, asset_ids: state.albumDraftIds }) });
+      setMessage("album-message", "Album created.");
+    }
+    closeAlbumEditor(); await loadAlbums();
+  } catch (error) { setMessage("album-picker-message", error.message, "error"); }
+}
 async function loadActivity() {
   const events = await api("/api/v1/activity");
-  byId("activity-list").innerHTML = events.map((event) => `<article><div><strong>${escapeHtml(event.message)}</strong><p>${escapeHtml(event.event_type)}</p></div><time datetime="${event.created_at}">${new Date(event.created_at).toLocaleString()}</time></article>`).join("") || "<p class=\"empty\">No activity yet.</p>";
+  byId("activity-list").innerHTML = events.map((event) => '<article><div><strong>' + escapeHtml(event.message) + "</strong><p>" + escapeHtml(event.event_type) + '</p></div><time datetime="' + event.created_at + '">' + new Date(event.created_at).toLocaleString() + "</time></article>").join("") || '<p class="empty">No activity yet.</p>';
 }
-
 function renderConnectionSettings(connection) {
-  byId("advertised-host").value = connection.advertised_host;
-  byId("advertised-port").value = connection.advertised_port;
-  byId("agent-poll-interval").value = connection.agent_poll_interval_seconds;
-  byId("agent-heartbeat-interval").value = connection.agent_heartbeat_interval_seconds;
-  byId("agent-auth-required").checked = connection.agent_auth_required;
-  byId("server-url").textContent = connection.server_url;
+  byId("advertised-host").value = connection.advertised_host; byId("advertised-port").value = connection.advertised_port;
+  byId("agent-poll-interval").value = connection.agent_poll_interval_seconds; byId("agent-heartbeat-interval").value = connection.agent_heartbeat_interval_seconds;
+  byId("agent-auth-required").checked = connection.agent_auth_required; byId("server-url").textContent = connection.server_url;
 }
-
 async function loadConnectionSettings() {
-  try {
-    renderConnectionSettings(await api("/api/v1/settings/connection"));
-  } catch (error) {
-    setMessage("connection-message", error.message, "error");
-  }
+  try { renderConnectionSettings(await api("/api/v1/settings/connection")); }
+  catch (error) { setMessage("connection-message", error.message, "error"); }
 }
 
-document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
-byId("image-file").addEventListener("change", (event) => { const file = event.target.files[0]; byId("file-label").textContent = file ? file.name : "Choose a JPEG, PNG, or WebP"; });
-byId("upload-form").addEventListener("submit", async (event) => { event.preventDefault(); const file = byId("image-file").files[0]; if (!file) return; const button = byId("submit-button"); button.disabled = true; setMessage("job-message", "Uploading original image…"); try { const formData = new FormData(); formData.append("file", file); const asset = await api("/api/v1/assets", { method: "POST", body: formData }); const job = await api(`/api/v1/displays/${displayId}/display-now`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_id: asset.id, render_settings: { fit_mode: byId("fit-mode").value, content_rotation: 0, focal_point_x: 0.5, focal_point_y: 0.5, flip_horizontal: false, flip_vertical: false } }) }); await pollJob(job.id); } catch (error) { setMessage("job-message", error.message, "error"); } finally { button.disabled = false; } });
-byId("settings-form").addEventListener("submit", async (event) => { event.preventDefault(); try { renderDisplay(await api(`/api/v1/displays/${displayId}/settings`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orientation: byId("orientation").value, rotation: Number(byId("rotation").value) }) })); setMessage("job-message", "Panel settings saved. New renders will use this orientation."); } catch (error) { setMessage("job-message", error.message, "error"); } });
-byId("connection-settings-form").addEventListener("submit", async (event) => { event.preventDefault(); try { const connection = await api("/api/v1/settings/connection", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ advertised_host: byId("advertised-host").value, advertised_port: Number(byId("advertised-port").value), agent_poll_interval_seconds: Number(byId("agent-poll-interval").value), agent_heartbeat_interval_seconds: Number(byId("agent-heartbeat-interval").value), agent_auth_required: byId("agent-auth-required").checked }) }); renderConnectionSettings(connection); setMessage("connection-message", "Connection settings saved."); } catch (error) { setMessage("connection-message", error.message, "error"); } });
-byId("show-trash").addEventListener("click", () => { showTrash = !showTrash; loadGallery(); });
-byId("delete-selected").addEventListener("click", () => deleteAssets([...document.querySelectorAll("#gallery-grid input[type=checkbox]:checked")].map((input) => input.value)).catch((error) => setMessage("gallery-message", error.message, "error")));
-byId("album-form").addEventListener("submit", async (event) => { event.preventDefault(); try { await api("/api/v1/albums", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: byId("album-name").value, asset_ids: [...byId("album-assets").selectedOptions].map((option) => option.value), order_mode: byId("album-order").value, interval_seconds: Number(byId("album-interval").value) * 60, enabled: byId("album-enabled").checked, time_zone: byId("album-time-zone").value, schedule_start_at: isoDate(byId("album-start").value), schedule_end_at: isoDate(byId("album-end").value), default_render_settings: { fit_mode: byId("album-fit").value } }) }); event.target.reset(); byId("album-time-zone").value = "Europe/Copenhagen"; byId("album-enabled").checked = true; setMessage("album-message", "Album created."); loadAlbums(); } catch (error) { setMessage("album-message", error.message, "error"); } });
-byId("album-edit-form").addEventListener("submit", async (event) => { event.preventDefault(); try { const id = byId("editing-album-id").value; await api(`/api/v1/albums/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ order_mode: byId("editing-album-order").value, interval_seconds: Number(byId("editing-album-interval").value) * 60, enabled: byId("editing-album-enabled").checked, time_zone: byId("editing-album-time-zone").value, schedule_start_at: isoDate(byId("editing-album-start").value), schedule_end_at: isoDate(byId("editing-album-end").value), default_render_settings: { fit_mode: byId("editing-album-fit").value } }) }); await api(`/api/v1/albums/${id}/items`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_ids: [...byId("editing-album-assets").selectedOptions].map((option) => option.value) }) }); setMessage("album-message", "Album updated."); loadAlbums(); } catch (error) { setMessage("album-message", error.message, "error"); } });
-byId("item-up").addEventListener("click", () => moveSelectedOptions(byId("editing-album-assets"), -1));
-byId("item-down").addEventListener("click", () => moveSelectedOptions(byId("editing-album-assets"), 1));
-byId("refresh-activity").addEventListener("click", () => loadActivity());
-loadDisplay().catch((error) => setMessage("job-message", error.message, "error"));
+document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
+byId("image-file").addEventListener("change", (event) => selectSourceFile(event.target.files[0]));
+byId("fit-mode").addEventListener("change", renderLocalPreview);
+byId("content-rotation").addEventListener("change", renderLocalPreview);
+byId("orientation").addEventListener("change", () => {
+  const rotation = byId("rotation");
+  if (byId("orientation").value === "portrait" && ["0", "180"].includes(rotation.value)) rotation.value = "90";
+  if (byId("orientation").value === "landscape" && ["90", "270"].includes(rotation.value)) rotation.value = "0";
+});
+byId("upload-button").addEventListener("click", async () => {
+  setUploadButtons(true);
+  try { await uploadCurrentImage(); setMessage("job-message", "Image saved to the gallery."); }
+  catch (error) { setMessage("job-message", error.message, "error"); }
+  finally { setUploadButtons(false); }
+});
+byId("display-button").addEventListener("click", async () => {
+  setUploadButtons(true);
+  try { const asset = await uploadCurrentImage(); await displayAsset(asset.id, renderSettings()); }
+  catch (error) { setMessage("job-message", error.message, "error"); }
+  finally { setUploadButtons(false); }
+});
+byId("settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    renderDisplay(await api("/api/v1/displays/" + displayId + "/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orientation: byId("orientation").value, rotation: Number(byId("rotation").value) }) }));
+    setMessage("connection-message", "Panel settings saved.");
+  } catch (error) { setMessage("connection-message", error.message, "error"); }
+});
+byId("connection-settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    const connection = await api("/api/v1/settings/connection", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ advertised_host: byId("advertised-host").value, advertised_port: Number(byId("advertised-port").value), agent_poll_interval_seconds: Number(byId("agent-poll-interval").value), agent_heartbeat_interval_seconds: Number(byId("agent-heartbeat-interval").value), agent_auth_required: byId("agent-auth-required").checked }) });
+    renderConnectionSettings(connection); setMessage("connection-message", "Connection settings saved.");
+  } catch (error) { setMessage("connection-message", error.message, "error"); }
+});
+byId("stop-playback").addEventListener("click", stopPlayback);
+byId("play-selected").addEventListener("click", openQuickPlay);
+byId("delete-selected").addEventListener("click", () => deleteAssets(selectedGalleryIds()).catch((error) => setMessage("gallery-message", error.message, "error")));
+byId("new-album").addEventListener("click", startNewAlbum);
+byId("back-to-albums").addEventListener("click", closeAlbumEditor);
+byId("cancel-album-edit").addEventListener("click", closeAlbumEditor);
+byId("open-album-picker").addEventListener("click", () => openAlbumPicker());
+byId("close-album-picker").addEventListener("click", closeAlbumPicker);
+byId("album-search").addEventListener("input", (event) => {
+  state.pickerQuery = event.target.value;
+  clearTimeout(state.pickerTimer);
+  state.pickerTimer = setTimeout(() => resetAlbumPicker(), 200);
+});
+byId("album-image-file").addEventListener("change", (event) => uploadAlbumImage(event.target.files[0]));
+byId("album-form").addEventListener("submit", saveAlbum);
+byId("close-image-editor").addEventListener("click", closeImageEditor);
+byId("save-image-editor").addEventListener("click", saveImageEditor);
+byId("image-editor-fit").addEventListener("change", renderImageEditorPreview);
+byId("image-editor-rotation").addEventListener("change", renderImageEditorPreview);
+byId("close-quick-play").addEventListener("click", closeQuickPlay);
+byId("start-quick-play").addEventListener("click", startQuickPlay);
+byId("refresh-activity").addEventListener("click", loadActivity);
+const pickerObserver = new IntersectionObserver((entries) => { if (entries[0].isIntersecting) loadAlbumPickerPage(); }, { root: byId("album-picker-dialog"), rootMargin: "180px" });
+pickerObserver.observe(byId("album-picker-sentinel"));
+loadDashboard().catch((error) => setMessage("job-message", error.message, "error"));

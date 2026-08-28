@@ -1,4 +1,4 @@
-"""Safe, content-addressed filesystem storage."""
+"""Local content-addressed storage for originals, previews, and display files."""
 
 from __future__ import annotations
 
@@ -87,6 +87,12 @@ class Storage:
     def write_preview(self, content: bytes, artifact_sha256: str) -> str:
         relative_path = f"artifacts/{artifact_sha256[:2]}/{artifact_sha256}.preview.png"
         return self._write_derived(content, relative_path)
+
+    def remove(self, relative_path: str) -> None:
+        self.path(relative_path).unlink(missing_ok=True)
+
+    def remove_preview(self, artifact_sha256: str) -> None:
+        self.preview_path(artifact_sha256).unlink(missing_ok=True)
 
     def _write_derived(self, content: bytes, relative_path: str) -> str:
         destination = self.path(relative_path)

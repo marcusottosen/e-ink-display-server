@@ -1,383 +1,126 @@
-# Docker Host Display Control System
+# Home e-ink display host
 
-## Purpose
+## What this is
 
-The Docker host is the brains of the system. It provides the web interface, stores uploaded content, prepares images for the target display, owns schedules and loops, and delivers immutable display jobs to Raspberry Pi agents.
+The Docker host is the local web tool for one fixed e-ink display. It stores
+images, resizes them for the panel, keeps albums, and exposes HTTP endpoints for
+the Pi. It controls that one panel.
 
-The host should be the only side that performs expensive or extensible computation.
+## Pi connection
 
-## Pi connection model
+The Pi makes HTTP requests to the Docker host:
 
-Use a **Pi-pull** connection: the Pi makes outbound HTTP requests to this host to
-poll its desired revision, download an artifact, send a heartbeat, and acknowledge
-the result. The host never opens a connection to the Pi.
+1. Ask whether a newer image is available.
+2. Download the prepared PNG when there is one.
+3. Tell the host when it starts, completes, or fails a refresh.
 
-This is the right model for the first appliance because it survives a Pi reboot,
-Wi-Fi reconnect, changing Pi IP address, and ordinary home-network NAT without
-discovery or inbound firewall rules. The only address to configure is the Docker
-host's LAN URL and its published API port (normally `http://<host-lan-ip>:8000`).
-The Pi needs no IP address or listening port in the host UI.
+The host does not connect to the Pi. Configure the Docker host's LAN address and
+published port in the Settings page. There is no Pi IP address or Pi listening
+port to configure here.
 
-For the trusted-LAN prototype, plain HTTP and no agent authentication are
-acceptable and are the defaults. Set `INKY_AGENT_AUTH_REQUIRED=true` and a unique
-device token when the network is no longer fully trusted. HTTPS, stronger
-authentication, and user accounts are explicitly deferred rather than being
-half-implemented now.
+Plain HTTP with optional device-token authentication is intended for a private
+home network. There is no web login or user-account system.
 
-## Recommended modern technology stack
+## Storage and restart behaviour
 
-### Backend
+The host stores its SQLite database, originals, previews, and prepared files in
+the `inky-host-data` Docker volume mounted at `/var/lib/inky`.
 
-- Python 3.12 or newer
-- FastAPI
-- Pydantic v2 for request, response, and configuration models
-- Uvicorn for local/container serving
-- SQLAlchemy 2.x and Alembic for database access and migrations
+The volume survives host-container restarts and LXC restarts. The Compose service
+uses `restart: unless-stopped`. Data is only removed by an explicit Docker-volume
+removal or an LXC snapshot rollback.
 
-### Frontend
+Gallery deletion is permanent. Deleting an image removes its original file,
+generated files, album entries, and queued job entries. It does not stop a
+deletion because the image was used by an album or display request.
 
-- TypeScript
-- SvelteKit or React with a small single-page interface
-- Vite for frontend builds
-- A component library or Tailwind CSS only if it improves delivery speed
+## Image handling
 
-The frontend can initially be served by the backend or a small separate web container.
+The fixed panel is 800 × 480. Its physical landscape/portrait installation and
+rotation are set in the Settings page.
 
-## Frontend product requirements
+On the dashboard, selecting a file only opens it in the browser for the framing
+helper. The file is not sent to the host until **Save to gallery** or **Upload and
+display now** is pressed.
 
-The first frontend should be a focused control panel for one display, while keeping
-the information model ready for multiple displays. The server owns a fixed display
-profile for each configured agent; the Pi does not need to identify or report its
-display model. The frontend must use the same renderer and display profile as
-artifact delivery: a preview is the exact resized RGB artifact sent to the Pi, not
-a browser-only approximation.
+The host performs only these changes:
 
-### Dashboard: upload and show
+- Read EXIF orientation.
+- Rotate the image when requested.
+- Crop, fit with white borders, or stretch.
+- Resize to the panel dimensions.
 
-- Provide an `Upload and display` action as the primary path: select or drop one
-  image, render it with the selected display settings, and make it the latest
-  desired revision for the chosen display.
-- For a single configured display, select it by default. For multiple displays,
-  require a visible display selection before the action is submitted.
-- Show rendering, download, refresh, completion, and failure status. A full E673
-  refresh is slow, so the UI must set expectations rather than implying an
-  immediate screen change.
-- Keep the uploaded original and rendered artifact in the gallery. Do not make a
-  one-off display action an ephemeral upload.
-- Allow the user to review the final-resolution preview and adjust display settings before
-  sending it; `Upload and display` may use the current defaults when no adjustment
-  is needed.
+Colours are left alone. The Inky driver maps pixels to the panel when it performs
+the physical refresh.
 
-### Display orientation and render settings
+## Web pages
 
-- Each configured display has a current physical orientation: landscape or portrait, with a
-  corresponding 0°, 90°, 180°, or 270° rotation where the hardware installation
-  requires it.
-- The orientation is a display-level setting and is applied consistently to
-  dashboard previews, gallery previews, album previews, render artifacts, and
-  display actions. It must never silently change an original asset.
-- Expose per-render framing controls: crop, fit, padding, focal point, rotation,
-  and optional flip. Clearly distinguish these content settings from the physical
-  display orientation.
-- Preview the final 800 × 480 RGB raster at the configured orientation, with a
-  visible indication of any crop or padding. Support both landscape and portrait
-  installations. The host preserves source colours and does not perform palette
-  conversion, dithering, or creative filters.
+### Dashboard
+
+Pick one image and use the framing helper before saving it or sending it to the
+panel. The page also shows the last image confirmed by the Pi and which album is
+running, if any. It also shows the newest image available to the Pi separately,
+so it is clear when an image has been requested but not yet confirmed on the
+panel. Sending one image directly stops the active album and drops its unfinished
+image requests.
 
 ### Gallery
 
-- List all stored original images with thumbnail, filename, upload date, source
-  dimensions, and the most recent rendered/displayed state.
-- Allow opening an image to inspect its full-colour, display-resolution preview and
-  to display it immediately using the current display settings.
-- Support multi-select and bulk deletion as well as single-image deletion.
-- Require confirmation for deletion, but never block it because an image is in use.
-  Preserve audit history and leave existing displayed artifacts intact until normal
-  replacement; running albums simply skip trashed images.
-- Prefer a recoverable soft-delete/undo period before permanent storage cleanup.
+Shows stored images. Use **Edit** to choose each image's crop/fit/stretch and
+rotation with the same panel-shaped helper used for a new upload. Those settings
+are kept with that image and apply whether it is displayed on its own or from an
+album.
+
+Select one or more images and use **Play selected** to run a temporary playlist.
+Choose the order and minutes per image; it is not added to the saved album list.
+Use **Stop playback** on the dashboard to stop either a saved album or this
+temporary playlist. Images can also be sent to the display or permanently
+deleted, one at a time or in a selected group.
 
 ### Albums
 
-- Provide an album page to create, rename, reorder, and delete albums; add or
-  remove existing gallery images; and inspect the rendered preview for each item.
-- Each album has a `Run` action that makes the album the desired display program,
-  plus `Stop`/replace behaviour that returns control to a single image or another
-  album.
-- Album settings include target display, sequential or shuffled order, interval,
-  start image, enabled state, time zone, optional schedule, and the default
-  framing/render settings for its items.
-- Apply the display's physical orientation to every album preview and generated
-  artifact. Per-image overrides should be possible later; album defaults are
-  sufficient for the first album release.
+Albums are playlists for the single display. They can run in order or shuffled,
+with an interval per image. New albums start with a 20-minute interval.
 
-### Colour preservation
+Use **Add images** from the playlist while creating or editing an album. It opens
+a searchable gallery picker, ordered newest first, which loads more images while
+you scroll. New files can also be uploaded directly from that picker. They first
+open the same local framing and rotation helper and are not uploaded until
+**Add to album** is pressed.
 
-- The host preserves the original image's RGB colours. It only applies configured
-  orientation, crop/fit/padding, resize, and flip operations.
-- Do not add palette conversion, dithering, colour optimisation, or creative
-  filters unless this requirement is explicitly changed.
+There are no schedule windows, calendars, or multiple-display targets.
 
-### Fitting supporting features
+### Settings
 
-- Display status card: connection state, last heartbeat, current/desired revision,
-  last successful refresh, and the latest error with a retry action where safe.
-- Recent activity/history: who uploaded, rendered, displayed, ran, stopped, or
-  deleted content, including job outcome and timestamps.
-- Empty, loading, offline, and failed states designed for a household control
-  panel, with clear recovery actions and no lost work after a refresh.
+Stores the panel orientation/rotation and the Docker host address, port, and Pi
+poll/heartbeat intervals.
 
-### Storage and jobs
-
-- PostgreSQL for durable application data
-- Redis for job notifications, leases, and background work
-- `arq`, Dramatiq, or an equivalent Redis-backed worker
-- Persistent Docker volumes for originals, previews, and final artifacts
-
-### Image processing
-
-- Pillow as the primary renderer
-- NumPy where useful for palette and pixel operations
-- Optional ImageMagick/libvips only when a real feature requires it
-- Content-addressed artifact storage using SHA-256
-
-Avoid placing image-processing work inside request handlers.
-
-## Docker deployment
-
-The production deployment should be defined with Docker Compose and include:
-
-- `web`: FastAPI and the frontend/static assets
-- `worker`: image rendering and schedule/job processing
-- `postgres`: durable database
-- `redis`: queue/notification backend
-- Optional reverse proxy such as Caddy or Traefik
-
-Every stateful service must use a named or bind-mounted persistent volume. Container rebuilds must not delete uploads, schedules, display registrations, or job history.
-
-Use multi-stage builds, pinned dependency lock files, non-root containers where practical, health checks, and explicit resource limits.
-
-For a first single-display prototype, `web`, an in-process worker, SQLite, and local artifact storage are sufficient. PostgreSQL and Redis should be introduced when the service needs durable background workers, multiple displays, or higher operational reliability.
-
-## Core server responsibilities
-
-- User authentication and authorization
-- Image upload and validation
-- Original image storage
-- Image rendering and preview generation
-- Fixed display configuration and optional agent authentication
-- Desired display revision management
-- Playlists, loops, and schedules
-- Job leases and retry handling
-- Artifact delivery
-- Display health/status dashboard
-- Audit history for image and schedule changes
-- Faithful, orientation-aware previews and frontend content management
-
-The server is authoritative for the desired state. A display that is offline should receive the latest valid desired revision after reconnecting rather than an unbounded backlog of obsolete jobs.
-
-## Rendering pipeline
-
-For each requested display image:
-
-1. Validate file type, file size, and image dimensions.
-2. Normalize EXIF orientation and colour profile.
-3. Apply the configured crop, fit, stretch, or padding mode.
-4. Resize to 800 x 480.
-5. Apply rotation or flip settings if configured.
-6. Produce a browser preview from the same RGB raster.
-7. Produce the immutable RGB PNG device artifact.
-8. Record renderer version, settings, dimensions, target display profile, and checksum.
-
-The renderer should be deterministic. The artifact cache key should include the source image hash, display profile, render settings, and renderer version.
-
-The first artifact format is an 800 x 480 RGB PNG. The Pi hardware driver performs
-the unavoidable physical-panel colour mapping only when it refreshes the display.
-
-## Suggested data model
-
-### Displays
-
-- `id`
-- `name`
-- `device_token_hash`
-- `agent_version`
-- `last_seen_at`
-- `last_error`
-- `current_revision`
-- `desired_revision`
-- Server-configured resolution, palette, physical orientation, and rotation
-- Server-configured default render/framing settings
-
-### Assets
-
-- `id`
-- Original filename
-- Original SHA-256
-- Storage path
-- MIME type
-- File size
-- Created timestamp
-- Soft-deleted timestamp, when applicable
-- Active-use deletion blockers for running albums, desired content, current content,
-  and queued display work
-
-### Rendered artifacts
-
-- Asset ID
-- Display profile
-- Renderer version
-- Render settings
-- Artifact format
-- Width and height
-- SHA-256
-- Storage path
-
-### Jobs
-
-- `id`
-- Display ID
-- Artifact ID
-- Revision
-- Status
-- Lease owner and expiry
-- Created, started, completed, and failed timestamps
-- Error information
-
-### Albums, schedules, and playlists
-
-- Display or display-group target
-- Ordered items
-- Sequential or shuffled order
-- Per-item duration and default render settings
-- Optional duration or cron-like schedule
-- Time zone
-- Enabled/disabled state
-- Start/end dates
-- Next item index and next scheduled run timestamp for an active album
-
-### Activity history
-
-- Event type and human-readable message
-- Related display, asset, album, and job identifiers where applicable
-- Timestamp
-
-## API requirements
-
-The API should expose versioned endpoints similar to:
+## Main routes
 
 ```text
 POST /api/v1/assets
-GET  /api/v1/assets
+PATCH /api/v1/assets/{asset_id}
+GET  /api/v1/assets?query=&offset=&limit=
+GET  /api/v1/assets/{asset_id}/original
 DELETE /api/v1/assets/{asset_id}
 POST /api/v1/assets/bulk-delete
-POST /api/v1/assets/{asset_id}/restore
-POST /api/v1/renders
 GET  /api/v1/assets/{asset_id}/preview
+
 POST /api/v1/albums
 GET  /api/v1/albums
-GET  /api/v1/albums/{album_id}
 PATCH /api/v1/albums/{album_id}
 PUT  /api/v1/albums/{album_id}/items
 POST /api/v1/albums/{album_id}/run
 POST /api/v1/albums/{album_id}/stop
 DELETE /api/v1/albums/{album_id}
-GET  /api/v1/activity
-POST /api/v1/displays
-GET  /api/v1/displays
-GET  /api/v1/displays/{display_id}
-PATCH /api/v1/displays/{display_id}/settings
-POST /api/v1/displays/{display_id}/display-now
-GET  /api/v1/displays/{display_id}/desired
+
+POST /api/v1/displays/inky-main/display-now
+POST /api/v1/displays/inky-main/play-selection
+POST /api/v1/displays/inky-main/stop-playback
+GET  /api/v1/displays/inky-main/desired
 GET  /api/v1/artifacts/{sha256}
-POST /api/v1/displays/{display_id}/heartbeat
-POST /api/v1/displays/{display_id}/jobs/{job_id}/started
-POST /api/v1/displays/{display_id}/jobs/{job_id}/completed
-POST /api/v1/displays/{display_id}/jobs/{job_id}/failed
+POST /api/v1/displays/inky-main/heartbeat
+POST /api/v1/displays/inky-main/jobs/{job_id}/started
+POST /api/v1/displays/inky-main/jobs/{job_id}/completed
+POST /api/v1/displays/inky-main/jobs/{job_id}/failed
 ```
-
-The desired-state response should include:
-
-- Job ID
-- Monotonic revision
-- Artifact URL
-- SHA-256 checksum
-- Artifact format
-- Dimensions
-- Border colour
-- Renderer version
-- Optional not-before and expiry timestamps
-
-Artifact downloads must be binary responses, not base64 embedded in JSON.
-
-## Gallery and album behaviour
-
-Gallery deletion is a soft delete: original bytes and audit history remain available
-for a later restore. The host always permits both single and bulk deletion, even if
-the image is current, desired, queued, or belongs to a running album. Existing
-artifacts remain available for already-issued display work; albums skip trashed
-items and stop only if none remain available.
-
-An album has ordered gallery items, a display target, default render settings,
-sequential or shuffle selection, a minimum 60-second interval, enabled state, time
-zone, and optional start/end window. The prototype uses one serialized in-process
-scheduler; it queues at most one new album item per interval and sends it through
-the normal desired-state/render worker.
-
-## Queue and reliability rules
-
-- Do not create a new physical update for every stale schedule tick.
-- Collapse obsolete jobs for the same display.
-- Use leases so abandoned jobs become available again.
-- Use at-least-once delivery with revision-based idempotency.
-- Do not mark a job complete until the Pi confirms that `show()` returned.
-- Treat a lost acknowledgement as an uncertain result, not as permission to delete the artifact.
-- Retain the latest artifact even after job history is cleaned up.
-
-The server should account for the display refresh time when scheduling loops. It must not promise sub-minute visual changes on the E673 hardware.
-
-## Security requirements
-
-- HTTPS, including on the home LAN where practical
-- One token per display, stored hashed on the server
-- Password-protected web UI
-- Input size/type validation for uploads
-- No shell execution based on uploaded filenames or metadata
-- Restricted artifact and upload paths
-- Secrets supplied through environment variables or a secret manager
-- Regular database and asset backups
-- Firewall policy allowing the Pi to reach the server without exposing Pi services publicly
-
-A static IP or DHCP reservation for the Docker host is recommended. The Pi should still use an outbound connection and should not require an inbound web port.
-
-## Observability and operations
-
-- Structured JSON logs
-- Request, render, and display-job correlation IDs
-- Health endpoints for web, database, Redis, and worker
-- Metrics for render duration, queue depth, display duration, failures, and last heartbeat
-- Error tracking such as Sentry or an equivalent self-hosted solution
-- Database migrations run as an explicit deployment step
-- Backup and restore procedure for PostgreSQL and asset volumes
-
-## Testing requirements
-
-- Unit tests for image sizing, RGB colour preservation, checksums, and cache keys
-- API contract tests shared with the Pi agent
-- Worker retry and lease-expiry tests
-- Artifact checksum and corruption tests
-- Schedule/time-zone tests
-- End-to-end test using an Inky mock
-- Hardware integration test with a real E673 display
-- Docker Compose startup and health-check test
-- Backup restoration test
-
-## Initial implementation order
-
-1. Define the versioned API, fixed display profile, and artifact contract.
-2. Implement upload, storage, and deterministic rendering.
-3. Configure the fixed single-display record and implement `display-now`.
-4. Implement the Pi polling agent and acknowledgement flow.
-5. Add status, retries, and offline caching.
-6. Add playlists, loops, and time-zone-aware scheduling.
-7. Add PostgreSQL/Redis separation and multiple-display support.
-8. Benchmark the Pi Zero W and decide whether packed artifacts are necessary.

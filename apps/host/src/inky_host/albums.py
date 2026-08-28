@@ -1,4 +1,4 @@
-"""Album persistence, safe asset references, and the single-process album runner."""
+"""Albums and the single-process album runner."""
 
 from __future__ import annotations
 
@@ -16,10 +16,11 @@ from .database import (
     AlbumItemRecord,
     AlbumRecord,
     AssetRecord,
+    DisplayJobRecord,
     DisplayRecord,
     record_activity,
 )
-from .worker import RenderWorker, create_display_now_job
+from .worker import JobStatus, RenderWorker, create_display_now_job
 
 
 def utc_now() -> datetime:
@@ -37,7 +38,9 @@ def asset_response(asset: AssetRecord) -> AssetResponse:
         height=asset.height,
         created_at=asset.created_at,
         deleted_at=asset.deleted_at,
-        preview_url=f"/api/v1/assets/{asset.id}/preview" if asset.width is not None else None,
+        preview_url=f"/api/v1/assets/{asset.id}/preview",
+        original_url=f"/api/v1/assets/{asset.id}/original",
+        render_settings=RenderSettings.model_validate(asset.render_settings or {}),
     )
 
 
@@ -68,7 +71,6 @@ def album_response(session: Session, album: AlbumRecord) -> AlbumResponse:
         time_zone=album.time_zone,
         schedule_start_at=album.schedule_start_at,
         schedule_end_at=album.schedule_end_at,
-        default_render_settings=RenderSettings.model_validate(album.default_render_settings),
         next_item_index=album.next_item_index,
         next_run_at=album.next_run_at,
         items=responses,
@@ -119,13 +121,7 @@ class AlbumScheduler:
             album = session.get(AlbumRecord, album_id)
             if album is None:
                 return None
-            for other in session.scalars(
-                select(AlbumRecord).where(
-                    AlbumRecord.display_id == album.display_id,
-                    AlbumRecord.is_running.is_(True),
-                )
-            ):
-                other.is_running = False
+            stop_running_albums(session, album.display_id)
             album.is_running = True
             album.enabled = True
             now = utc_now()
@@ -141,7 +137,7 @@ class AlbumScheduler:
             record_activity(
                 session,
                 "album.started",
-                f"Started album '{album.name}'",
+                f"Started {_album_label(album)}",
                 display_id=album.display_id,
                 album_id=album.id,
                 job_id=job_id,
@@ -154,15 +150,7 @@ class AlbumScheduler:
             album = session.get(AlbumRecord, album_id)
             if album is None:
                 return
-            album.is_running = False
-            album.next_run_at = None
-            record_activity(
-                session,
-                "album.stopped",
-                f"Stopped album '{album.name}'",
-                display_id=album.display_id,
-                album_id=album.id,
-            )
+            stop_album_record(session, album)
             session.commit()
 
     def _queue_due_items(self) -> list[str]:
@@ -181,7 +169,7 @@ class AlbumScheduler:
                     record_activity(
                         session,
                         "album.schedule-ended",
-                        f"Stopped album '{album.name}' because its schedule window ended",
+                        f"Stopped {_album_label(album)} because its schedule window ended",
                         display_id=album.display_id,
                         album_id=album.id,
                     )
@@ -203,7 +191,7 @@ class AlbumScheduler:
             record_activity(
                 session,
                 "album.stopped-empty",
-                f"Stopped album '{album.name}' because it has no available images",
+                f"Stopped {_album_label(album)} because it has no available images",
                 display_id=album.display_id,
                 album_id=album.id,
             )
@@ -219,13 +207,13 @@ class AlbumScheduler:
         asset = session.get(AssetRecord, item.asset_id)
         if display is None or asset is None:
             return None
-        settings = RenderSettings.model_validate(album.default_render_settings)
-        job = create_display_now_job(session, display, asset, settings)
+        settings = RenderSettings.model_validate(asset.render_settings or display.default_render_settings)
+        job = create_display_now_job(session, display, asset, settings, album_id=album.id)
         album.next_run_at = now + timedelta(seconds=album.interval_seconds)
         record_activity(
             session,
             "album.item-queued",
-            f"Queued '{asset.original_filename}' from album '{album.name}'",
+            f"Queued '{asset.original_filename}' from {_album_label(album)}",
             display_id=album.display_id,
             asset_id=asset.id,
             album_id=album.id,
@@ -237,3 +225,53 @@ class AlbumScheduler:
 def _is_available_asset(session: Session, asset_id: str) -> bool:
     asset = session.get(AssetRecord, asset_id)
     return asset is not None and asset.deleted_at is None
+
+
+def _album_label(album: AlbumRecord) -> str:
+    return "selected images" if album.is_temporary else f"album '{album.name}'"
+
+
+def stop_running_albums(session: Session, display_id: str) -> list[AlbumRecord]:
+    """Stop every active album for a display and cancel its unfinished jobs."""
+
+    albums = session.scalars(
+        select(AlbumRecord).where(
+            AlbumRecord.display_id == display_id,
+            AlbumRecord.is_running.is_(True),
+        )
+    ).all()
+    for album in albums:
+        stop_album_record(session, album)
+    return albums
+
+
+def stop_album_record(session: Session, album: AlbumRecord) -> None:
+    """Stop one album and make its not-yet-started display work obsolete."""
+
+    was_running = album.is_running
+    album.is_running = False
+    album.next_run_at = None
+
+    unfinished = session.scalars(
+        select(DisplayJobRecord).where(
+            DisplayJobRecord.album_id == album.id,
+            DisplayJobRecord.status.in_([JobStatus.QUEUED, JobStatus.RENDERING, JobStatus.READY]),
+        )
+    ).all()
+    unfinished_ids = {job.id for job in unfinished}
+    for job in unfinished:
+        job.status = JobStatus.SUPERSEDED
+
+    display = session.get(DisplayRecord, album.display_id)
+    if display is not None and display.desired_job_id in unfinished_ids:
+        display.desired_job_id = None
+        display.desired_artifact_id = None
+
+    if was_running:
+        record_activity(
+            session,
+            "album.stopped",
+            f"Stopped {_album_label(album)}",
+            display_id=album.display_id,
+            album_id=album.id,
+        )
