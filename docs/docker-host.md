@@ -14,9 +14,9 @@ The Pi makes HTTP requests to the Docker host:
 2. Download the prepared PNG when there is one.
 3. Tell the host when it starts, completes, or fails a refresh.
 
-The host does not connect to the Pi. Configure the Docker host's LAN address and
-published port in the Settings page. There is no Pi IP address or Pi listening
-port to configure here.
+The host does not connect to the Pi. Configure the Pi separately with this
+Docker host's LAN address and published port. There is no Pi IP address or Pi
+listening port to configure here.
 
 Plain HTTP with optional device-token authentication is intended for a private
 home network. There is no web login or user-account system.
@@ -92,8 +92,8 @@ There are no schedule windows, calendars, or multiple-display targets.
 
 ### Settings
 
-Stores the panel orientation/rotation and the Docker host address, port, and Pi
-poll/heartbeat intervals.
+Stores panel orientation/rotation and the optional device-token requirement.
+The Pi's server URL and polling intervals belong in the Pi's own configuration.
 
 ## Main routes
 

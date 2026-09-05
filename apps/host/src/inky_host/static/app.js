@@ -28,7 +28,6 @@ function showView(view) {
   document.querySelectorAll(".tab").forEach((element) => { element.classList.toggle("active", element.dataset.view === view); });
   if (view === "gallery") loadGallery();
   if (view === "albums") loadAlbums();
-  if (view === "activity") loadActivity();
   if (view === "settings") loadConnectionSettings();
 }
 function previewDimensions() {
@@ -59,6 +58,17 @@ function renderDisplayStates() {
   }, "No image is available to the Pi.");
   return display?.active_album_name ? 'Running: ' + display.active_album_name : 'Not running';
 }
+function lastCheckInLabel(value) {
+  if (!value) return "Not seen yet";
+  const timestamp = /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : value + "Z";
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - new Date(timestamp).getTime()) / 60000));
+  if (elapsedMinutes < 60) return elapsedMinutes + " minute" + (elapsedMinutes === 1 ? "" : "s") + " ago";
+  if (elapsedMinutes < 48 * 60) {
+    const elapsedHours = Math.floor(elapsedMinutes / 60);
+    return elapsedHours + " hour" + (elapsedHours === 1 ? "" : "s") + " ago";
+  }
+  return new Date(value).toLocaleString();
+}
 function renderDisplay(display) {
   state.display = display;
   byId("orientation").value = display.orientation;
@@ -72,7 +82,7 @@ function renderDisplay(display) {
   const albumState = renderDisplayStates();
   byId("display-details").innerHTML = [
     ["Album", albumState],
-    ["Last Pi check-in", display.last_seen_at ? new Date(display.last_seen_at).toLocaleString() : "Not seen yet"],
+    ["Last Pi check-in", lastCheckInLabel(display.last_seen_at)],
     ["Last error", display.last_error || "None"],
   ].map(([label, value]) => "<div><dt>" + label + "</dt><dd>" + escapeHtml(value) + "</dd></div>").join("");
   renderLocalPreview();
@@ -299,7 +309,10 @@ function renderAlbumPicker() {
     return '<article class="picker-item ' + (chosen ? "selected" : "") + '">' + assetPreview(asset, "picker-thumb") + '<div><strong>' + escapeHtml(asset.original_filename) + '</strong><span>' + (asset.width ? asset.width + " × " + asset.height : "Original image") + '</span></div><button data-add="' + asset.id + '" class="' + (chosen ? "secondary" : "") + '" type="button" ' + (chosen ? "disabled" : "") + ">" + (chosen ? "Added" : "Add") + "</button></article>";
   }).join("") || '<p class="empty">No gallery images match that search.</p>';
   list.querySelectorAll("[data-add]").forEach((button) => button.addEventListener("click", () => {
-    state.albumDraftIds.push(button.dataset.add); renderAlbumPlaylist(); renderAlbumPicker();
+    if (!state.albumDraftIds.includes(button.dataset.add)) {
+      state.albumDraftIds.push(button.dataset.add);
+      renderAlbumPlaylist(); renderAlbumPicker();
+    }
   }));
   byId("album-picker-sentinel").hidden = !state.pickerHasMore;
 }
@@ -350,7 +363,7 @@ function resetAlbumEditor() {
 }
 function startNewAlbum() { resetAlbumEditor(); showAlbumEditor(); }
 function editAlbum(album) {
-  state.editingAlbumId = album.id; state.albumDraftIds = album.items.map((item) => item.asset_id);
+  state.editingAlbumId = album.id; state.albumDraftIds = [...new Set(album.items.map((item) => item.asset_id))];
   state.albumAssets.clear(); album.items.forEach((item) => state.albumAssets.set(item.asset.id, item.asset));
   byId("album-name").value = album.name; byId("album-interval").value = Math.round(album.interval_seconds / 60);
   byId("album-order").value = album.order_mode;
@@ -374,9 +387,10 @@ async function deleteAlbum(id) {
   catch (error) { setMessage("album-message", error.message, "error"); }
 }
 async function loadAlbums() {
-  state.albums = await api("/api/v1/albums");
+  const results = await Promise.all([api("/api/v1/albums"), api("/api/v1/displays/" + displayId)]);
+  state.albums = results[0];
   renderAlbumList();
-  if (state.display) renderDisplay(state.display);
+  renderDisplay(results[1]);
 }
 async function uploadAlbumImage(file) {
   if (!file) return;
@@ -396,7 +410,9 @@ async function stopPlayback() {
 }
 async function saveAlbum(event) {
   event.preventDefault();
-  if (!state.albumDraftIds.length) { setMessage("album-picker-message", "Use Add images to choose at least one image.", "error"); return; }
+  const assetIds = [...new Set(state.albumDraftIds)];
+  state.albumDraftIds = assetIds;
+  if (!assetIds.length) { setMessage("album-picker-message", "Use Add images to choose at least one image.", "error"); return; }
   const settings = {
     name: byId("album-name").value, order_mode: byId("album-order").value,
     interval_seconds: Number(byId("album-interval").value) * 60, enabled: true,
@@ -405,23 +421,17 @@ async function saveAlbum(event) {
   try {
     if (state.editingAlbumId) {
       await api("/api/v1/albums/" + state.editingAlbumId, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
-      await api("/api/v1/albums/" + state.editingAlbumId + "/items", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_ids: state.albumDraftIds }) });
+      await api("/api/v1/albums/" + state.editingAlbumId + "/items", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ asset_ids: assetIds }) });
       setMessage("album-message", "Album updated.");
     } else {
-      await api("/api/v1/albums", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...settings, asset_ids: state.albumDraftIds }) });
+      await api("/api/v1/albums", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...settings, asset_ids: assetIds }) });
       setMessage("album-message", "Album created.");
     }
     closeAlbumEditor(); await loadAlbums();
   } catch (error) { setMessage("album-picker-message", error.message, "error"); }
 }
-async function loadActivity() {
-  const events = await api("/api/v1/activity");
-  byId("activity-list").innerHTML = events.map((event) => '<article><div><strong>' + escapeHtml(event.message) + "</strong><p>" + escapeHtml(event.event_type) + '</p></div><time datetime="' + event.created_at + '">' + new Date(event.created_at).toLocaleString() + "</time></article>").join("") || '<p class="empty">No activity yet.</p>';
-}
 function renderConnectionSettings(connection) {
-  byId("advertised-host").value = connection.advertised_host; byId("advertised-port").value = connection.advertised_port;
-  byId("agent-poll-interval").value = connection.agent_poll_interval_seconds; byId("agent-heartbeat-interval").value = connection.agent_heartbeat_interval_seconds;
-  byId("agent-auth-required").checked = connection.agent_auth_required; byId("server-url").textContent = connection.server_url;
+  byId("agent-auth-required").checked = connection.agent_auth_required;
 }
 async function loadConnectionSettings() {
   try { renderConnectionSettings(await api("/api/v1/settings/connection")); }
@@ -459,8 +469,8 @@ byId("settings-form").addEventListener("submit", async (event) => {
 byId("connection-settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    const connection = await api("/api/v1/settings/connection", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ advertised_host: byId("advertised-host").value, advertised_port: Number(byId("advertised-port").value), agent_poll_interval_seconds: Number(byId("agent-poll-interval").value), agent_heartbeat_interval_seconds: Number(byId("agent-heartbeat-interval").value), agent_auth_required: byId("agent-auth-required").checked }) });
-    renderConnectionSettings(connection); setMessage("connection-message", "Connection settings saved.");
+    const connection = await api("/api/v1/settings/connection", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_auth_required: byId("agent-auth-required").checked }) });
+    renderConnectionSettings(connection); setMessage("connection-message", "Pi access settings saved.");
   } catch (error) { setMessage("connection-message", error.message, "error"); }
 });
 byId("stop-playback").addEventListener("click", stopPlayback);
@@ -484,7 +494,6 @@ byId("image-editor-fit").addEventListener("change", renderImageEditorPreview);
 byId("image-editor-rotation").addEventListener("change", renderImageEditorPreview);
 byId("close-quick-play").addEventListener("click", closeQuickPlay);
 byId("start-quick-play").addEventListener("click", startQuickPlay);
-byId("refresh-activity").addEventListener("click", loadActivity);
 const pickerObserver = new IntersectionObserver((entries) => { if (entries[0].isIntersecting) loadAlbumPickerPage(); }, { root: byId("album-picker-dialog"), rootMargin: "180px" });
 pickerObserver.observe(byId("album-picker-sentinel"));
 loadDashboard().catch((error) => setMessage("job-message", error.message, "error"));

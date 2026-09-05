@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import uuid4
-
 from sqlalchemy import JSON, Boolean, DateTime, Engine, ForeignKey, Integer, String, Text, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -41,15 +39,11 @@ class DisplayRecord(Base):
 
 
 class ConnectionSettingsRecord(Base):
-    """Singleton configuration for how the fixed Pi reaches this host."""
+    """Singleton configuration for Pi API access."""
 
     __tablename__ = "connection_settings"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    advertised_host: Mapped[str] = mapped_column(String(255))
-    advertised_port: Mapped[int] = mapped_column(Integer)
-    agent_poll_interval_seconds: Mapped[int] = mapped_column(Integer, default=30)
-    agent_heartbeat_interval_seconds: Mapped[int] = mapped_column(Integer, default=60)
     agent_auth_required: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
@@ -138,48 +132,13 @@ class AlbumItemRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
-class ActivityRecord(Base):
-    __tablename__ = "activity"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    event_type: Mapped[str] = mapped_column(String(64), index=True)
-    message: Mapped[str] = mapped_column(Text)
-    display_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    asset_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    album_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    job_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
-
-
-def record_activity(
-    session: Session,
-    event_type: str,
-    message: str,
-    *,
-    display_id: str | None = None,
-    asset_id: str | None = None,
-    album_id: str | None = None,
-    job_id: str | None = None,
-) -> ActivityRecord:
-    record = ActivityRecord(
-        id=str(uuid4()),
-        event_type=event_type,
-        message=message,
-        display_id=display_id,
-        asset_id=asset_id,
-        album_id=album_id,
-        job_id=job_id,
-    )
-    session.add(record)
-    return record
-
-
 def _apply_sqlite_migrations(engine: Engine) -> None:
     """Add columns needed when an existing SQLite file is opened by newer code."""
 
     if engine.dialect.name != "sqlite":
         return
     with engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS activity"))
         columns = {row[1] for row in connection.execute(text("PRAGMA table_info(assets)"))}
         if "deleted_at" not in columns:
             connection.execute(text("ALTER TABLE assets ADD COLUMN deleted_at DATETIME"))

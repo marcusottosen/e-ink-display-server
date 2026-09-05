@@ -16,6 +16,9 @@ venv/
 .coverage
 coverage.xml
 htmlcov/
+build/
+dist/
+*.egg-info/
 
 # Local application state and artifacts
 data/

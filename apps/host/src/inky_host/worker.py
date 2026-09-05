@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from inky_contract import DisplayProfile, RenderSettings
 
-from .database import ArtifactRecord, AssetRecord, DisplayJobRecord, DisplayRecord, record_activity
+from .database import ArtifactRecord, AssetRecord, DisplayJobRecord, DisplayRecord
 from .profiles import profile_from_record
 from .rendering import RENDERER_VERSION, artifact_cache_key, render_image, validate_source_image
 from .storage import Storage
@@ -81,14 +81,6 @@ class RenderWorker:
             ).all()
             for job in interrupted_jobs:
                 job.status = JobStatus.QUEUED
-                record_activity(
-                    session,
-                    "artifact.render-requeued",
-                    f"Requeued interrupted render for display job {job.id}",
-                    display_id=job.display_id,
-                    asset_id=job.asset_id,
-                    job_id=job.id,
-                )
             queued_job_ids = session.scalars(
                 select(DisplayJobRecord.id).where(DisplayJobRecord.status == JobStatus.QUEUED)
             ).all()
@@ -145,14 +137,6 @@ class RenderWorker:
             display.desired_artifact_id = artifact.id
             job.revision = display.desired_revision
             job.status = JobStatus.READY
-            record_activity(
-                session,
-                "artifact.ready",
-                f"Prepared artifact for '{asset.original_filename}'",
-                display_id=display.id,
-                asset_id=asset.id,
-                job_id=job.id,
-            )
             session.commit()
 
     def _cached_or_render(
@@ -224,14 +208,6 @@ class RenderWorker:
         job.error_code = code
         job.error_message = message[:1000]
         job.failed_at = utc_now()
-        record_activity(
-            session,
-            "artifact.failed",
-            f"Could not render asset for display job {job.id}",
-            display_id=job.display_id,
-            asset_id=job.asset_id,
-            job_id=job.id,
-        )
         session.commit()
 
 

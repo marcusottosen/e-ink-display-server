@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -86,25 +85,11 @@ class DisplayResponse(BaseModel):
 class ConnectionSettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    advertised_host: str = Field(min_length=10, max_length=255)
-    advertised_port: int = Field(ge=1, le=65535)
-    agent_poll_interval_seconds: int = Field(ge=5, le=3600)
-    agent_heartbeat_interval_seconds: int = Field(ge=5, le=3600)
     agent_auth_required: bool = False
-
-    @model_validator(mode="after")
-    def validate_advertised_host(self) -> ConnectionSettingsUpdate:
-        parsed = urlsplit(self.advertised_host)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("advertised_host must be an http:// or https:// host")
-        if parsed.port is not None or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-            raise ValueError("advertised_host must not include a port, path, query, or fragment")
-        return self
 
 
 class ConnectionSettingsResponse(ConnectionSettingsUpdate):
     display_id: str
-    server_url: str
     updated_at: datetime
 
 
@@ -203,13 +188,3 @@ class QuickPlayRequest(BaseModel):
 class DeleteResult(BaseModel):
     deleted_ids: list[str]
 
-
-class ActivityResponse(BaseModel):
-    id: str
-    event_type: str
-    message: str
-    display_id: str | None
-    asset_id: str | None
-    album_id: str | None
-    job_id: str | None
-    created_at: datetime

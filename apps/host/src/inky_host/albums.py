@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from datetime import UTC, datetime, timedelta
 
@@ -18,13 +19,24 @@ from .database import (
     AssetRecord,
     DisplayJobRecord,
     DisplayRecord,
-    record_activity,
 )
 from .worker import JobStatus, RenderWorker, create_display_now_job
+
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def as_utc(value: datetime | None) -> datetime | None:
+    """Restore UTC on timestamps loaded from SQLite, which stores no offset."""
+
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def asset_response(asset: AssetRecord) -> AssetResponse:
@@ -69,10 +81,10 @@ def album_response(session: Session, album: AlbumRecord) -> AlbumResponse:
         enabled=album.enabled,
         is_running=album.is_running,
         time_zone=album.time_zone,
-        schedule_start_at=album.schedule_start_at,
-        schedule_end_at=album.schedule_end_at,
+        schedule_start_at=as_utc(album.schedule_start_at),
+        schedule_end_at=as_utc(album.schedule_end_at),
         next_item_index=album.next_item_index,
-        next_run_at=album.next_run_at,
+        next_run_at=as_utc(album.next_run_at),
         items=responses,
         created_at=album.created_at,
         updated_at=album.updated_at,
@@ -111,9 +123,14 @@ class AlbumScheduler:
 
     async def _run(self) -> None:
         while True:
-            job_ids = await asyncio.to_thread(self._queue_due_items)
-            for job_id in job_ids:
-                await self._worker.enqueue(job_id)
+            try:
+                job_ids = await asyncio.to_thread(self._queue_due_items)
+                for job_id in job_ids:
+                    await self._worker.enqueue(job_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("album scheduler iteration failed")
             await asyncio.sleep(2)
 
     def _start_and_queue(self, album_id: str) -> str | None:
@@ -125,23 +142,17 @@ class AlbumScheduler:
             album.is_running = True
             album.enabled = True
             now = utc_now()
-            if album.schedule_end_at and now >= album.schedule_end_at:
+            schedule_start_at = as_utc(album.schedule_start_at)
+            schedule_end_at = as_utc(album.schedule_end_at)
+            if schedule_end_at and now >= schedule_end_at:
                 album.is_running = False
                 session.commit()
                 return None
-            if album.schedule_start_at and now < album.schedule_start_at:
-                album.next_run_at = album.schedule_start_at
+            if schedule_start_at and now < schedule_start_at:
+                album.next_run_at = schedule_start_at
                 job_id = None
             else:
                 job_id = self._queue_next_item(session, album, now)
-            record_activity(
-                session,
-                "album.started",
-                f"Started {_album_label(album)}",
-                display_id=album.display_id,
-                album_id=album.id,
-                job_id=job_id,
-            )
             session.commit()
             return job_id
 
@@ -161,20 +172,16 @@ class AlbumScheduler:
                 select(AlbumRecord).where(AlbumRecord.is_running.is_(True), AlbumRecord.enabled.is_(True))
             ).all()
             for album in albums:
-                if album.schedule_start_at and now < album.schedule_start_at:
+                schedule_start_at = as_utc(album.schedule_start_at)
+                schedule_end_at = as_utc(album.schedule_end_at)
+                next_run_at = as_utc(album.next_run_at)
+                if schedule_start_at and now < schedule_start_at:
                     continue
-                if album.schedule_end_at and now >= album.schedule_end_at:
+                if schedule_end_at and now >= schedule_end_at:
                     album.is_running = False
                     album.next_run_at = None
-                    record_activity(
-                        session,
-                        "album.schedule-ended",
-                        f"Stopped {_album_label(album)} because its schedule window ended",
-                        display_id=album.display_id,
-                        album_id=album.id,
-                    )
                     continue
-                if album.next_run_at is None or album.next_run_at <= now:
+                if next_run_at is None or next_run_at <= now:
                     job_id = self._queue_next_item(session, album, now)
                     if job_id is not None:
                         job_ids.append(job_id)
@@ -188,13 +195,6 @@ class AlbumScheduler:
         valid_items = [item for item in items if _is_available_asset(session, item.asset_id)]
         if not valid_items:
             album.is_running = False
-            record_activity(
-                session,
-                "album.stopped-empty",
-                f"Stopped {_album_label(album)} because it has no available images",
-                display_id=album.display_id,
-                album_id=album.id,
-            )
             return None
 
         if album.order_mode == AlbumOrderMode.SHUFFLE:
@@ -210,25 +210,12 @@ class AlbumScheduler:
         settings = RenderSettings.model_validate(asset.render_settings or display.default_render_settings)
         job = create_display_now_job(session, display, asset, settings, album_id=album.id)
         album.next_run_at = now + timedelta(seconds=album.interval_seconds)
-        record_activity(
-            session,
-            "album.item-queued",
-            f"Queued '{asset.original_filename}' from {_album_label(album)}",
-            display_id=album.display_id,
-            asset_id=asset.id,
-            album_id=album.id,
-            job_id=job.id,
-        )
         return job.id
 
 
 def _is_available_asset(session: Session, asset_id: str) -> bool:
     asset = session.get(AssetRecord, asset_id)
     return asset is not None and asset.deleted_at is None
-
-
-def _album_label(album: AlbumRecord) -> str:
-    return "selected images" if album.is_temporary else f"album '{album.name}'"
 
 
 def stop_running_albums(session: Session, display_id: str) -> list[AlbumRecord]:
@@ -248,7 +235,6 @@ def stop_running_albums(session: Session, display_id: str) -> list[AlbumRecord]:
 def stop_album_record(session: Session, album: AlbumRecord) -> None:
     """Stop one album and make its not-yet-started display work obsolete."""
 
-    was_running = album.is_running
     album.is_running = False
     album.next_run_at = None
 
@@ -266,12 +252,3 @@ def stop_album_record(session: Session, album: AlbumRecord) -> None:
     if display is not None and display.desired_job_id in unfinished_ids:
         display.desired_job_id = None
         display.desired_artifact_id = None
-
-    if was_running:
-        record_activity(
-            session,
-            "album.stopped",
-            f"Stopped {_album_label(album)}",
-            display_id=album.display_id,
-            album_id=album.id,
-        )

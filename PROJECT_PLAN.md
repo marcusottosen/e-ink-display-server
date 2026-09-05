@@ -25,7 +25,7 @@ deploy/systemd/     Pi service files and install script
 ## Implemented
 
 - [x] Docker host with a persistent named volume and automatic restart.
-- [x] SQLite storage for images, albums, display jobs, and simple activity history.
+- [x] SQLite storage for images, albums, and display jobs.
 - [x] Fixed 800 × 480 display settings with landscape/portrait rotation.
 - [x] Dashboard image picker with local-only framing preview before upload.
 - [x] Image gallery with permanent single and bulk deletion.

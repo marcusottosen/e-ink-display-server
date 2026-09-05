@@ -89,10 +89,27 @@ class Storage:
         return self._write_derived(content, relative_path)
 
     def remove(self, relative_path: str) -> None:
-        self.path(relative_path).unlink(missing_ok=True)
+        self._delete_path(relative_path).unlink(missing_ok=True)
 
     def remove_preview(self, artifact_sha256: str) -> None:
-        self.preview_path(artifact_sha256).unlink(missing_ok=True)
+        self.remove(f"artifacts/{artifact_sha256[:2]}/{artifact_sha256}.preview.png")
+
+    def _delete_path(self, relative_path: str) -> Path:
+        """Return an unlink target confined to this storage volume.
+
+        The final filename is deliberately not resolved: if it is unexpectedly
+        a symlink, unlink removes the symlink rather than following it.
+        """
+
+        relative = Path(relative_path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("storage path escapes the data directory")
+        target = self.root / relative
+        root = self.root.resolve()
+        parent = target.parent.resolve()
+        if parent != root and root not in parent.parents:
+            raise ValueError("storage path escapes the data directory")
+        return target
 
     def _write_derived(self, content: bytes, relative_path: str) -> str:
         destination = self.path(relative_path)

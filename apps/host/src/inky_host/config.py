@@ -35,20 +35,12 @@ class Settings(BaseSettings):
     display_time_zone: str = "Europe/Copenhagen"
     agent_device_token: SecretStr = SecretStr("home-agent-token-change-me")
     agent_auth_required: bool = False
-    advertised_host: str = "http://localhost"
-    advertised_port: int = 8000
-    agent_poll_interval_seconds: int = 30
-    agent_heartbeat_interval_seconds: int = 60
 
     @model_validator(mode="after")
     def validate_token_when_enabled(self) -> Settings:
         token = self.agent_device_token.get_secret_value()
         if self.agent_auth_required and token.startswith(("home-", "development-", "replace-")):
             raise ValueError("Set INKY_AGENT_DEVICE_TOKEN before enabling device-token checking")
-        if not self.advertised_host.startswith(("http://", "https://")):
-            raise ValueError("INKY_ADVERTISED_HOST must start with http:// or https://")
-        if not 1 <= self.advertised_port <= 65535:
-            raise ValueError("INKY_ADVERTISED_PORT must be between 1 and 65535")
         return self
 
     @cached_property
