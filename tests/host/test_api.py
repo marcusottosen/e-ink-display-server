@@ -19,7 +19,6 @@ def png_upload(color: tuple[int, int, int] = (30, 110, 200)) -> bytes:
 def test_health_and_upload_to_desired_state(tmp_path: Path) -> None:
     settings = Settings(
         data_dir=tmp_path / "data",
-        agent_device_token="test-device-token",
         environment="test",
     )
     with TestClient(create_app(settings)) as client:
@@ -49,20 +48,18 @@ def test_health_and_upload_to_desired_state(tmp_path: Path) -> None:
         assert job["status"] == "ready"
         assert client.get(job["preview_url"]).headers["content-type"].startswith("image/png")
 
-        headers = {"Authorization": "Bearer test-device-token"}
-        desired = client.get("/api/v1/displays/inky-main/desired", headers=headers)
+        desired = client.get("/api/v1/displays/inky-main/desired")
         assert desired.status_code == 200
         payload = desired.json()
         assert payload["artifact"]["width"] == 800
         assert payload["artifact"]["format"] == "rgb-png"
-        artifact = Image.open(BytesIO(client.get(payload["artifact"]["url"], headers=headers).content))
+        artifact = Image.open(BytesIO(client.get(payload["artifact"]["url"]).content))
         assert artifact.mode == "RGB"
 
         started = JobAcknowledgement(event=JobEvent.STARTED, occurred_at="2026-01-01T00:00:00Z")
         assert (
             client.post(
                 f"/api/v1/displays/inky-main/jobs/{job_id}/started",
-                headers=headers,
                 json=started.model_dump(mode="json"),
             ).status_code
             == 200
@@ -75,7 +72,6 @@ def test_health_and_upload_to_desired_state(tmp_path: Path) -> None:
         assert (
             client.post(
                 f"/api/v1/displays/inky-main/jobs/{job_id}/completed",
-                headers=headers,
                 json=completed.model_dump(mode="json"),
             ).status_code
             == 200
@@ -88,48 +84,6 @@ def test_upload_rejects_unsupported_content_type(tmp_path: Path) -> None:
     with TestClient(create_app(settings)) as client:
         response = client.post("/api/v1/assets", files={"file": ("not-an-image.txt", b"hello", "text/plain")})
     assert response.status_code == 415
-
-
-def test_connection_settings_describe_pi_pull_and_allow_trusted_lan_access(tmp_path: Path) -> None:
-    settings = Settings(data_dir=tmp_path / "data", environment="test")
-    with TestClient(create_app(settings)) as client:
-        current = client.get("/api/v1/settings/connection")
-        assert current.status_code == 200
-        assert current.json()["agent_auth_required"] is False
-
-        updated = client.patch(
-            "/api/v1/settings/connection",
-            json={
-                "advertised_host": "http://192.168.0.10",
-                "advertised_port": 8080,
-                "agent_poll_interval_seconds": 20,
-                "agent_heartbeat_interval_seconds": 60,
-                "agent_auth_required": False,
-            },
-        )
-        assert updated.status_code == 200
-        assert updated.json()["server_url"] == "http://192.168.0.10:8080"
-        assert client.get("/api/v1/displays/inky-main/desired").status_code == 204
-
-        secured = client.patch(
-            "/api/v1/settings/connection",
-            json={
-                "advertised_host": "http://192.168.0.10",
-                "advertised_port": 8080,
-                "agent_poll_interval_seconds": 20,
-                "agent_heartbeat_interval_seconds": 60,
-                "agent_auth_required": True,
-            },
-        )
-        assert secured.status_code == 200
-        assert client.get("/api/v1/displays/inky-main/desired").status_code == 401
-        assert (
-            client.get(
-                "/api/v1/displays/inky-main/desired",
-                headers={"Authorization": "Bearer development-agent-token-change-me"},
-            ).status_code
-            == 204
-        )
 
 
 def test_portrait_setting_changes_the_browser_preview_orientation(tmp_path: Path) -> None:

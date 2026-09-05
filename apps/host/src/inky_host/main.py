@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -40,8 +38,6 @@ from .api_models import (
     AssetResponse,
     AssetUpdate,
     BulkDeleteRequest,
-    ConnectionSettingsResponse,
-    ConnectionSettingsUpdate,
     DeleteResult,
     DisplayResponse,
     DisplaySettingsUpdate,
@@ -54,11 +50,9 @@ from .database import (
     AlbumRecord,
     ArtifactRecord,
     AssetRecord,
-    ConnectionSettingsRecord,
     DisplayJobRecord,
     DisplayRecord,
     create_session_factory,
-    utc_now,
 )
 from .observability import configure_logging, request_id_context
 from .profiles import profile_from_record
@@ -68,10 +62,6 @@ from .worker import JobStatus, RenderWorker, create_display_now_job
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
-
-
-def _token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def _unique_asset_ids(asset_ids: list[UUID]) -> list[str]:
@@ -217,7 +207,9 @@ def _display_response(session: Session, display: DisplayRecord) -> DisplayRespon
         current_album_name=_album_label(current_album),
         requested_asset_id=requested_asset.id if requested_asset else None,
         requested_asset_filename=requested_asset.original_filename if requested_asset else None,
-        requested_preview_url=f"/api/v1/jobs/{requested_job.id}/preview" if requested_job and requested_job.artifact_id else None,
+        requested_preview_url=(
+            f"/api/v1/jobs/{requested_job.id}/preview" if requested_job and requested_job.artifact_id else None
+        ),
         requested_album_id=requested_album.id if requested_album else None,
         requested_album_name=_album_label(requested_album),
         active_album_name=_album_label(active_album),
@@ -246,7 +238,6 @@ def _seed_display(sessions: sessionmaker[Session], settings: Settings) -> None:
             DisplayRecord(
                 id=profile.id,
                 name=profile.name,
-                device_token_hash=_token_hash(settings.agent_device_token.get_secret_value()),
                 orientation=profile.orientation.value,
                 rotation=int(profile.rotation),
                 time_zone=profile.time_zone,
@@ -254,29 +245,6 @@ def _seed_display(sessions: sessionmaker[Session], settings: Settings) -> None:
             )
         )
         session.commit()
-
-
-def _seed_connection_settings(sessions: sessionmaker[Session], settings: Settings) -> None:
-    with sessions() as session:
-        if session.get(ConnectionSettingsRecord, "default") is not None:
-            return
-        session.add(
-            ConnectionSettingsRecord(
-                id="default",
-                agent_auth_required=settings.agent_auth_required,
-            )
-        )
-        session.commit()
-
-
-def _connection_settings_response(
-    connection: ConnectionSettingsRecord, display_id: str
-) -> ConnectionSettingsResponse:
-    return ConnectionSettingsResponse(
-        display_id=display_id,
-        agent_auth_required=connection.agent_auth_required,
-        updated_at=connection.updated_at,
-    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -288,7 +256,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         sessions = create_session_factory(runtime_settings)
         storage = Storage(runtime_settings.data_dir)
         _seed_display(sessions, runtime_settings)
-        _seed_connection_settings(sessions, runtime_settings)
         worker = RenderWorker(sessions, storage, runtime_settings.max_source_pixels)
         album_scheduler = AlbumScheduler(sessions, worker)
         app.state.settings = runtime_settings
@@ -325,18 +292,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def require_agent(request: Request, sessions: sessionmaker[Session] = Depends(get_sessions)) -> DisplayRecord:
         display_id = request.path_params.get("display_id", request.app.state.settings.display_id)
-        authorization = request.headers.get("Authorization", "")
-        token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
         with sessions() as session:
             display = session.get(DisplayRecord, display_id)
-            connection = session.get(ConnectionSettingsRecord, "default")
-            auth_required = (
-                connection.agent_auth_required if connection is not None else runtime_settings.agent_auth_required
-            )
-            if display is None or (
-                auth_required and (not token or not hmac.compare_digest(display.device_token_hash, _token_hash(token)))
-            ):
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid device token")
+            if display is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Display not found")
             session.expunge(display)
             return display
 
@@ -350,35 +309,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with sessions() as session:
             session.execute(text("SELECT 1"))
         return {"status": "ok", "database": "ok", "worker": "running"}
-
-    @app.get("/api/v1/settings/connection", response_model=ConnectionSettingsResponse)
-    def get_connection_settings(request: Request) -> ConnectionSettingsResponse:
-        sessions: sessionmaker[Session] = request.app.state.sessions
-        with sessions() as session:
-            connection = session.get(ConnectionSettingsRecord, "default")
-            if connection is None:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Connection settings unavailable",
-                )
-            return _connection_settings_response(connection, request.app.state.settings.display_id)
-
-    @app.patch("/api/v1/settings/connection", response_model=ConnectionSettingsResponse)
-    def update_connection_settings(
-        update: ConnectionSettingsUpdate, request: Request
-    ) -> ConnectionSettingsResponse:
-        sessions: sessionmaker[Session] = request.app.state.sessions
-        with sessions() as session:
-            connection = session.get(ConnectionSettingsRecord, "default")
-            if connection is None:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Connection settings unavailable",
-                )
-            connection.agent_auth_required = update.agent_auth_required
-            session.commit()
-            session.refresh(connection)
-            return _connection_settings_response(connection, request.app.state.settings.display_id)
 
     @app.post("/api/v1/assets", response_model=AssetResponse, status_code=status.HTTP_201_CREATED)
     async def upload_asset(

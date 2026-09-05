@@ -82,17 +82,6 @@ class DisplayResponse(BaseModel):
     default_render_settings: RenderSettings
 
 
-class ConnectionSettingsUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    agent_auth_required: bool = False
-
-
-class ConnectionSettingsResponse(ConnectionSettingsUpdate):
-    display_id: str
-    updated_at: datetime
-
-
 class AlbumOrderMode(StrEnum):
     SEQUENTIAL = "sequential"
     SHUFFLE = "shuffle"

@@ -5,7 +5,6 @@ from __future__ import annotations
 from functools import cached_property
 from pathlib import Path
 
-from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from inky_contract import (
@@ -33,16 +32,6 @@ class Settings(BaseSettings):
     display_orientation: DisplayOrientation = DisplayOrientation.LANDSCAPE
     display_rotation_degrees: DisplayRotation = DisplayRotation.DEGREES_0
     display_time_zone: str = "Europe/Copenhagen"
-    agent_device_token: SecretStr = SecretStr("home-agent-token-change-me")
-    agent_auth_required: bool = False
-
-    @model_validator(mode="after")
-    def validate_token_when_enabled(self) -> Settings:
-        token = self.agent_device_token.get_secret_value()
-        if self.agent_auth_required and token.startswith(("home-", "development-", "replace-")):
-            raise ValueError("Set INKY_AGENT_DEVICE_TOKEN before enabling device-token checking")
-        return self
-
     @cached_property
     def resolved_database_url(self) -> str:
         if self.database_url:

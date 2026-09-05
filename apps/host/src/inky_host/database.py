@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+
 from sqlalchemy import JSON, Boolean, DateTime, Engine, ForeignKey, Integer, String, Text, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -24,7 +25,6 @@ class DisplayRecord(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
-    device_token_hash: Mapped[str] = mapped_column(String(64))
     orientation: Mapped[str] = mapped_column(String(16))
     rotation: Mapped[int] = mapped_column(Integer)
     time_zone: Mapped[str] = mapped_column(String(64))
@@ -36,16 +36,6 @@ class DisplayRecord(Base):
     agent_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class ConnectionSettingsRecord(Base):
-    """Singleton configuration for Pi API access."""
-
-    __tablename__ = "connection_settings"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    agent_auth_required: Mapped[bool] = mapped_column(Boolean, default=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 class AssetRecord(Base):

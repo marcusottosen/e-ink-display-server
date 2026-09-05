@@ -18,8 +18,8 @@ The host does not connect to the Pi. Configure the Pi separately with this
 Docker host's LAN address and published port. There is no Pi IP address or Pi
 listening port to configure here.
 
-Plain HTTP with optional device-token authentication is intended for a private
-home network. There is no web login or user-account system.
+Plain HTTP is intended for a private home network. There is no web login or
+user-account system.
 
 ## Storage and restart behaviour
 
@@ -92,7 +92,7 @@ There are no schedule windows, calendars, or multiple-display targets.
 
 ### Settings
 
-Stores panel orientation/rotation and the optional device-token requirement.
+Stores panel orientation and rotation.
 The Pi's server URL and polling intervals belong in the Pi's own configuration.
 
 ## Main routes

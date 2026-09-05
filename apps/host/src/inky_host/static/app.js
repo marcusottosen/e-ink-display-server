@@ -28,7 +28,6 @@ function showView(view) {
   document.querySelectorAll(".tab").forEach((element) => { element.classList.toggle("active", element.dataset.view === view); });
   if (view === "gallery") loadGallery();
   if (view === "albums") loadAlbums();
-  if (view === "settings") loadConnectionSettings();
 }
 function previewDimensions() {
   if (!state.display) return [800, 480];
@@ -430,14 +429,6 @@ async function saveAlbum(event) {
     closeAlbumEditor(); await loadAlbums();
   } catch (error) { setMessage("album-picker-message", error.message, "error"); }
 }
-function renderConnectionSettings(connection) {
-  byId("agent-auth-required").checked = connection.agent_auth_required;
-}
-async function loadConnectionSettings() {
-  try { renderConnectionSettings(await api("/api/v1/settings/connection")); }
-  catch (error) { setMessage("connection-message", error.message, "error"); }
-}
-
 document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
 byId("image-file").addEventListener("change", (event) => selectSourceFile(event.target.files[0]));
 byId("fit-mode").addEventListener("change", renderLocalPreview);
@@ -464,13 +455,6 @@ byId("settings-form").addEventListener("submit", async (event) => {
   try {
     renderDisplay(await api("/api/v1/displays/" + displayId + "/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orientation: byId("orientation").value, rotation: Number(byId("rotation").value) }) }));
     setMessage("connection-message", "Panel settings saved.");
-  } catch (error) { setMessage("connection-message", error.message, "error"); }
-});
-byId("connection-settings-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  try {
-    const connection = await api("/api/v1/settings/connection", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_auth_required: byId("agent-auth-required").checked }) });
-    renderConnectionSettings(connection); setMessage("connection-message", "Pi access settings saved.");
   } catch (error) { setMessage("connection-message", error.message, "error"); }
 });
 byId("stop-playback").addEventListener("click", stopPlayback);

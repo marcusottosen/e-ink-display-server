@@ -66,7 +66,7 @@ The Inky library itself documents Python 3.7+ and the runtime dependencies. Pyth
 - `systemd` watchdog/restart handling
 - `journald` for logs
 - `venv` or a pinned application virtual environment
-- Environment variables or a root-readable configuration file for server URL and device token
+- Environment variables or a root-readable configuration file for the server URL
 
 Avoid Docker on the Pi Zero W. It adds memory, storage, and operational overhead without helping the display workload.
 
@@ -113,10 +113,6 @@ Heartbeat JSON requires `current_revision` (zero or higher) and UTC `sent_at`;
 `event` matching the URL (`started`, `completed`, or `failed`) and UTC
 `occurred_at`. A `completed` report also includes `completed_revision`; a
 `failed` report may include `error_code` and `error_message`.
-
-Device-token authentication is optional. When enabled in the host Settings page,
-send `Authorization: Bearer <token>` with every request; otherwise send no token.
-Never log the token.
 
 ## Artifact format
 
