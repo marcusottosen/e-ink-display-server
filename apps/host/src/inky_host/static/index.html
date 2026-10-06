@@ -8,10 +8,6 @@
   </head>
   <body>
     <main class="app-shell">
-      <header class="app-header">
-        <p class="app-mark">INKY</p>
-      </header>
-
       <nav class="tabs" aria-label="Main navigation">
         <button class="tab active" data-view="dashboard" type="button">Dashboard</button>
         <button class="tab" data-view="gallery" type="button">Gallery</button>
@@ -51,14 +47,14 @@
       </section>
 
       <section id="gallery-view" class="view" hidden>
-        <div class="section-heading page-heading"><div><p class="eyebrow">GALLERY</p><h2>Your image library</h2><p class="subtitle">Select images to play them once as a temporary album, or delete them permanently.</p></div><div class="actions"><button id="play-selected" type="button">Play selected</button><button id="delete-selected" class="danger" type="button">Delete selected</button></div></div>
+        <div class="section-heading page-heading gallery-heading"><div><h2>Your image library</h2><p id="gallery-count" class="subtitle">Loading photos…</p><p class="gallery-help">Press and hold an image to select it.</p></div><div id="gallery-selection-actions" class="actions" hidden><span id="gallery-selection-count" class="selection-count" aria-live="polite"></span><button id="play-selected" type="button">Play selected</button><button id="delete-selected" class="danger" type="button">Delete selected</button></div></div>
         <p id="gallery-message" class="message" aria-live="polite"></p><div id="gallery-grid" class="gallery-grid"></div>
       </section>
 
       <section id="albums-view" class="view" hidden>
         <div id="album-listing">
           <div class="section-heading page-heading">
-            <div><p class="eyebrow">ALBUMS</p><h2>Display rotations</h2><p class="subtitle">Create an album, choose its images, and run it when you are ready.</p></div>
+            <div><h2>Display rotations</h2><p class="subtitle">Create an album, choose its images, and run it when you are ready.</p></div>
             <button id="new-album" type="button">Create album</button>
           </div>
           <p id="album-message" class="message" aria-live="polite"></p>

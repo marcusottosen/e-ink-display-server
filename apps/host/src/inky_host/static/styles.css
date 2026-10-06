@@ -41,8 +41,6 @@ h2 { font-size: 1.3rem; letter-spacing: -.035em; margin-bottom: 0; }
 h3 { margin-bottom: 5px; }
 
 .app-shell { margin: 0 auto; max-width: 1220px; padding: 20px 16px 54px; }
-.app-header { margin-bottom: 13px; }
-.app-mark { color: #1d7a57; font-size: .75rem; font-weight: 900; letter-spacing: .19em; margin: 0; }
 .eyebrow { color: #1d7a57; font-size: .7rem; font-weight: 850; letter-spacing: .15em; margin-bottom: 8px; }
 .subtitle, .muted, .help-text { color: #607269; }
 .subtitle { line-height: 1.5; margin-bottom: 0; }
@@ -116,8 +114,8 @@ h3 { margin-bottom: 5px; }
 .display-state-grid { display: grid; gap: 18px; }
 .display-state-grid > section > .eyebrow { margin: 17px 0 3px; }
 .status-note { color: #607269; font-size: .82rem; margin: 0; }
-.current-display { align-items: center; background: #f4f7f1; border-radius: 11px; display: grid; gap: 13px; grid-template-columns: 110px minmax(0, 1fr); margin-top: 17px; padding: 11px; }
-.current-display img, .current-display-empty { aspect-ratio: 5 / 3; background: #dfe5dc; border-radius: 7px; display: block; object-fit: cover; width: 100%; }
+.current-display { align-items: center; background: #f4f7f1; border-radius: 11px; display: grid; gap: 13px; grid-template-columns: 90px minmax(0, 1fr); margin-top: 17px; padding: 11px; }
+.current-display img, .current-display-empty { aspect-ratio: 3 / 4; background: #dfe5dc; border-radius: 9px; display: block; object-fit: cover; width: 100%; }
 .current-display-empty { align-content: center; color: #63746b; font-size: .74rem; line-height: 1.35; padding: 7px; text-align: center; }
 .current-display-copy > .eyebrow { margin-bottom: 4px; }
 .current-display-copy { min-width: 0; }
@@ -132,18 +130,29 @@ h3 { margin-bottom: 5px; }
 .actions, .asset-actions, .album-actions, .sequence-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .page-heading .actions { width: 100%; }
 .page-heading .actions button { flex: 1; }
-.gallery-grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
-.asset-card { background: #fffefa; border: 1px solid #dce0d6; border-radius: 14px; display: flex; flex-direction: column; min-width: 0; overflow: hidden; padding: 12px; }
-.asset-card > img, .thumbnail-placeholder { aspect-ratio: 4 / 3; background: #263b31; border-radius: 9px; color: #d8e1d9; display: block; object-fit: cover; width: 100%; }
+.gallery-heading { align-items: flex-end; }
+.gallery-help { color: #738078; font-size: .78rem; margin: 5px 0 0; }
+.gallery-heading .actions { align-items: center; }
+.gallery-heading .selection-count { color: #52655c; flex-basis: 100%; font-size: .78rem; font-weight: 800; }
+.gallery-grid { display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.gallery-grid > .empty { grid-column: 1 / -1; }
+.asset-card { aspect-ratio: 3 / 4; background: #263b31; border: 0; border-radius: 11px; min-width: 0; overflow: hidden; position: relative; }
+.gallery-image { -webkit-touch-callout: none; background: transparent; border-radius: inherit; display: block; height: 100%; min-height: 0; padding: 0; touch-action: manipulation; user-select: none; width: 100%; }
+.gallery-image:hover:not(:disabled) { background: transparent; }
+.gallery-image > img, .thumbnail-placeholder { background: #263b31; color: #d8e1d9; display: block; height: 100%; object-fit: cover; transition: transform .18s ease, filter .18s ease; width: 100%; }
+.gallery-image:hover > img { transform: scale(1.025); }
+.asset-card.selected .gallery-image > img { filter: brightness(.66); }
+.asset-card.selected { box-shadow: inset 0 0 0 3px #fff, 0 0 0 3px #176b4c; }
+.selected-indicator { align-items: center; background: #176b4c; border: 2px solid #fff; border-radius: 999px; color: #fff; display: none; font-size: .8rem; height: 25px; justify-content: center; position: absolute; right: 7px; top: 7px; width: 25px; }
+.asset-card.selected .selected-indicator { display: flex; }
+.gallery-item-actions { background: #17251fe8; bottom: 0; display: grid; gap: 5px; left: 0; padding: 7px; position: absolute; right: 0; }
+.gallery-item-actions[hidden], .gallery-heading .actions[hidden] { display: none; }
+.gallery-item-actions button { border-radius: 7px; font-size: .7rem; min-height: 30px; padding: 0 5px; }
+.gallery-item-actions button.secondary { background: #f2f5ef; }
 .thumbnail-placeholder { align-content: center; font-size: .75rem; text-align: center; }
 .asset-card.trashed { opacity: .63; }
-.select-asset { align-items: center; display: flex; font-size: .78rem; gap: 6px; margin-bottom: 8px; }
-.select-asset input, .inline-check input { min-height: auto; width: auto; }
-.asset-info { min-width: 0; padding: 10px 1px 5px; }
-.asset-info h3 { font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.asset-info p { color: #687870; font-size: .72rem; line-height: 1.35; margin-bottom: 9px; }
-.asset-actions { margin-top: auto; }
-.asset-actions button { flex: 1; font-size: .75rem; min-height: 38px; padding: 0 7px; }
+.gallery-select { height: 1px; opacity: 0; overflow: hidden; pointer-events: none; position: absolute; width: 1px; }
+.inline-check input { min-height: auto; width: auto; }
 
 .album-editor[hidden] { display: none; }
 .album-editor form, .compact-form { display: grid; gap: 15px; margin-top: 18px; }
@@ -202,7 +211,7 @@ h3 { margin-bottom: 5px; }
   .app-shell { padding: 30px 24px 68px; }
   .tabs { margin-left: 0; margin-right: 0; padding-left: 0; padding-right: 0; }
   .card { padding: 22px; }
-  .gallery-grid { grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); }
+  .gallery-grid { gap: 12px; grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); }
   .form-grid { grid-template-columns: 1fr 1fr; }
   .details { grid-template-columns: 1fr 1fr; }
   .display-state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -216,7 +225,7 @@ h3 { margin-bottom: 5px; }
   .render-controls { grid-column: 2; grid-row: 1; }
   .preview-frame { margin-top: 23px; }
   .details { grid-template-columns: repeat(4, 1fr); }
-  .gallery-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .gallery-grid { gap: 14px; grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)); }
   .album-picker-dialog .album-library { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .album-card { align-items: center; grid-template-columns: minmax(0, 1fr) auto; }
   .album-card-content { align-items: center; grid-template-columns: minmax(0, 1fr) auto; }

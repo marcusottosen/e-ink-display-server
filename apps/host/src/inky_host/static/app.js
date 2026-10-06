@@ -251,10 +251,69 @@ function assetPreview(asset, className = "") {
 
 async function loadGallery() {
   const assets = await api("/api/v1/assets?limit=100");
-  byId("gallery-grid").innerHTML = assets.map((asset) => '<article class="asset-card"><label class="select-asset"><input type="checkbox" value="' + asset.id + '"> Select</label>' + assetPreview(asset) + '<div class="asset-info"><h3>' + escapeHtml(asset.original_filename) + '</h3><p>' + (asset.width ? asset.width + " × " + asset.height : "Original image") + " · " + (asset.file_size / 1024 / 1024).toFixed(1) + ' MiB</p></div><div class="asset-actions"><button data-display="' + asset.id + '" type="button">Display now</button><button data-edit="' + asset.id + '" type="button" class="secondary">Edit</button><button data-delete="' + asset.id + '" class="danger" type="button">Delete</button></div></article>').join("") || '<p class="empty">No images here yet. Start from the dashboard.</p>';
+  byId("gallery-count").textContent = assets.length + " photo" + (assets.length === 1 ? "" : "s") + (assets.length === 100 ? " shown" : "");
+  byId("gallery-grid").innerHTML = assets.map((asset) => '<article class="asset-card" data-asset-card="' + asset.id + '"><input class="gallery-select" type="checkbox" value="' + asset.id + '" tabindex="-1"><button class="gallery-image" data-gallery-image="' + asset.id + '" type="button" aria-label="' + escapeHtml(asset.original_filename) + '. Press and hold to select, or press to show actions." aria-expanded="false" aria-pressed="false">' + assetPreview(asset) + '<span class="selected-indicator" aria-hidden="true">✓</span></button><div class="gallery-item-actions" data-gallery-actions="' + asset.id + '" hidden><button data-display="' + asset.id + '" type="button">Display</button><button data-edit="' + asset.id + '" type="button" class="secondary">Edit</button><button data-delete="' + asset.id + '" class="danger" type="button">Delete</button></div></article>').join("") || '<p class="empty">No images here yet. Start from the dashboard.</p>';
+  byId("gallery-grid").querySelectorAll("[data-gallery-image]").forEach(bindGalleryImage);
   byId("gallery-grid").querySelectorAll("[data-display]").forEach((button) => button.addEventListener("click", () => displayAsset(button.dataset.display).catch((error) => setMessage("gallery-message", error.message, "error"))));
   byId("gallery-grid").querySelectorAll("[data-edit]").forEach((button) => button.addEventListener("click", () => openImageEditor("asset", assets.find((asset) => asset.id === button.dataset.edit))));
   byId("gallery-grid").querySelectorAll("[data-delete]").forEach((button) => button.addEventListener("click", () => deleteAssets([button.dataset.delete]).catch((error) => setMessage("gallery-message", error.message, "error"))));
+  updateGallerySelection();
+}
+function closeGalleryActions() {
+  document.querySelectorAll("[data-gallery-actions]").forEach((actions) => { actions.hidden = true; });
+  document.querySelectorAll("[data-gallery-image]").forEach((image) => image.setAttribute("aria-expanded", "false"));
+}
+function setGallerySelected(card, selected) {
+  card.querySelector(".gallery-select").checked = selected;
+  card.classList.toggle("selected", selected);
+  card.querySelector(".gallery-image").setAttribute("aria-pressed", String(selected));
+  updateGallerySelection();
+}
+function updateGallerySelection() {
+  const count = selectedGalleryIds().length;
+  const actions = byId("gallery-selection-actions");
+  actions.hidden = count === 0;
+  byId("gallery-selection-count").textContent = count + " selected";
+  byId("gallery-grid").classList.toggle("selection-mode", count > 0);
+}
+function bindGalleryImage(image) {
+  const card = image.closest(".asset-card");
+  let holdTimer = null;
+  let held = false;
+  const cancelHold = () => { window.clearTimeout(holdTimer); holdTimer = null; };
+  image.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    held = false;
+    holdTimer = window.setTimeout(() => {
+      held = true;
+      closeGalleryActions();
+      setGallerySelected(card, !card.classList.contains("selected"));
+      if (navigator.vibrate) navigator.vibrate(30);
+    }, 500);
+  });
+  image.addEventListener("pointerup", cancelHold);
+  image.addEventListener("pointercancel", cancelHold);
+  image.addEventListener("pointerleave", cancelHold);
+  image.addEventListener("dragstart", (event) => event.preventDefault());
+  image.addEventListener("contextmenu", (event) => event.preventDefault());
+  image.addEventListener("keydown", (event) => {
+    if (event.key.toLowerCase() !== "s") return;
+    event.preventDefault();
+    closeGalleryActions();
+    setGallerySelected(card, !card.classList.contains("selected"));
+  });
+  image.addEventListener("click", () => {
+    if (held) { held = false; return; }
+    if (selectedGalleryIds().length) {
+      setGallerySelected(card, !card.classList.contains("selected"));
+      return;
+    }
+    const actions = card.querySelector("[data-gallery-actions]");
+    const shouldOpen = actions.hidden;
+    closeGalleryActions();
+    actions.hidden = !shouldOpen;
+    image.setAttribute("aria-expanded", String(shouldOpen));
+  });
 }
 async function deleteAssets(assetIds) {
   if (!assetIds.length || !window.confirm("Permanently delete " + assetIds.length + " image(s)? This cannot be undone.")) return;
